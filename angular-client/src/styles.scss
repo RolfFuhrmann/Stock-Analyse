@@ -1,0 +1,22 @@
+/* Tailwind – ohne preflight (kein Konflikt mit Material) */
+@tailwind components;
+@tailwind utilities;
+
+/* ── Global Reset ── */
+*, *::before, *::after {
+  box-sizing: border-box;
+  margin: 0;
+  padding: 0;
+}
+
+body {
+  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+  background: #f9fafb;
+  color: #1a1f2e;
+  min-height: 100vh;
+}
+
+/* Material Form Fields: Subscript-Bereich ausblenden (spart Platz im Header) */
+.mat-mdc-form-field-subscript-wrapper {
+  display: none !important;
+}

@@ -1,0 +1,52 @@
+# ── Secrets & Konfiguration ───────────────────────────────────
+# Niemals .env-Dateien committen – sie enthalten API-Keys und VPN-Schlüssel
+.env
+**/.env
+
+# ── Python ────────────────────────────────────────────────────
+__pycache__/
+**/__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+*.so
+
+# Test- und Coverage-Artefakte
+.coverage
+**/.coverage
+.pytest_cache/
+**/.pytest_cache/
+htmlcov/
+.tox/
+
+# Virtual Environments
+.venv/
+venv/
+env/
+
+# ── Node / Angular ────────────────────────────────────────────
+node_modules/
+**/node_modules/
+dist/
+**/dist/
+.angular/
+**/.angular/
+
+# ── Docker ────────────────────────────────────────────────────
+# Keine Docker-Volumes oder lokale Override-Compose-Dateien committen
+docker-compose.override.yml
+
+# ── macOS ─────────────────────────────────────────────────────
+.DS_Store
+**/.DS_Store
+__MACOSX/
+
+# ── IDE / Editor ──────────────────────────────────────────────
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# ── Logs & temporäre Dateien ──────────────────────────────────
+*.log
+*.tmp

@@ -1,0 +1,96 @@
+version: '3.8'
+
+services:
+  # ── VPN Gateway (Gluetun mit WireGuard) ─────────────────────
+  vpn:
+    image: qmcgaw/gluetun
+    container_name: vpn
+    cap_add:
+      - NET_ADMIN
+    devices:
+      - /dev/net/tun:/dev/net/tun
+    env_file:
+      - .env
+    environment:
+      - VPN_SERVICE_PROVIDER=${VPN_SERVICE_PROVIDER}
+      - VPN_TYPE=${VPN_TYPE}
+      # Aktiviert den Filter für die Gratis-Server:
+      - FREE_ONLY=${FREE_ONLY}
+
+      # Gewünschtes Land eintragen (z. B. Netherlands, United States, Japan)
+      - SERVER_COUNTRIES=${SERVER_COUNTRIES}
+
+      # Tragen Sie hier Ihre Werte aus der heruntergeladenen Datei ein:
+      - WIREGUARD_PRIVATE_KEY=${WIREGUARD_PRIVATE_KEY}
+      - WIREGUARD_ADDRESSES=${WIREGUARD_ADDRESSES}
+
+      # ERGÄNZUNG: Erlaubt dem Docker-Netzwerk (172.x.x.x) den Zugriff durch die VPN-Firewall
+      - FIREWALL_OUTBOUND_SUBNETS=${FIREWALL_OUTBOUND_SUBNETS}
+    ports:
+      - "8011:8011"
+    networks:
+      stock-net:
+        aliases:
+          - yahoo-service
+    restart: unless-stopped
+
+  # ── Agent Service (:8010) ────────────────────────────────────
+  agent-service:
+    build:
+      context: ./agent-service
+      dockerfile: Dockerfile
+    container_name: stock_agent
+    restart: unless-stopped
+    ports:
+      - "8010:8010"
+    environment:
+      - YAHOO_SERVICE_URL=http://yahoo-service:8011
+      - TWELVEDATA_SERVICE_URL=http://twelvedata-service:8012
+    depends_on:
+      - vpn
+      - twelvedata-service
+    networks:
+      - stock-net
+
+  # ── Yahoo Finance Service (Läuft ÜBER VPN) ───────────────────
+  yahoo-service:
+    build:
+      context: ./yahoo-service
+      dockerfile: Dockerfile
+    container_name: stock_yahoo
+    restart: unless-stopped
+    network_mode: "container:vpn"
+    depends_on:
+      - vpn
+
+  # ── Twelve Data Service (:8012) ──────────────────────────────
+  twelvedata-service:
+    build:
+      context: ./twelvedata-service
+      dockerfile: Dockerfile
+    container_name: stock_twelvedata
+    restart: unless-stopped
+    ports:
+      - "8012:8012"
+    env_file:
+      - ./twelvedata-service/.env
+    networks:
+      - stock-net
+
+  # ── Angular Client (:4200) ───────────────────────────────────
+  angular-client:
+    build:
+      context: ./angular-client
+      dockerfile: Dockerfile
+    container_name: stock_client
+    restart: unless-stopped
+    ports:
+      - "4200:80"
+    depends_on:
+      - agent-service
+    networks:
+      - stock-net
+
+networks:
+  stock-net:
+    driver: bridge
