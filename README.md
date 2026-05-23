@@ -11,7 +11,7 @@ Microservice-Architektur mit SSE-Push pro Ticker:
 1. Angular sendet Ticker-Liste + Quelle (yahoo - für Xetra-Werte|twelvedata für US-Werte) an Agent.
 2. Agent abonniert SSE vom gewählten Data Service.
 3. Data Service pusht pro Ticker sofort nach Abruf (mit Delay).
-4. Agent analysiert (Elliott Wave · MACD · Stochastik) nach Umkehrsignale im Abwertstrend und pusht Ergebnis an Angular.
+4. Agent analysiert (Elliott Wave: A-B-C abwärts· MACD: unter 0 · Stochastik: unter 20) nach Umkehrsignale im Abwertstrend und pusht Ergebnis an Angular.
 5. Angular zeigt jeden Ticker sofort an sobald er verarbeitet ist.
 
 ---
@@ -43,7 +43,7 @@ Da Yahoo Finance aggressive Anti-Scraping-Mechanismen nutzt, läuft der `yahoo-s
    ```
 
 4. **Web-UI öffnen:**
-   Öffne im Mac-Browser die Adresse `http://localhost:4200`
+   Öffne im Browser die Adresse `http://localhost:4200`
 
 ---
 
@@ -53,7 +53,7 @@ Falls Yahoo die aktuelle VPN-IP trotz `curl_cffi` blockiert (`YFRateLimitError`)
 
 ### 🔄 Befehl zum Kappen und Neuverbinden (Frische IP anfordern)
 
-Führe diesen Befehl im Terminal deines Macs aus, um die bestehende VPN-Verbindung sofort zu trennen und vollautomatisch eine neue IP-Adresse aus den Niederlande zu beziehen:
+Führe diesen Befehl im Terminal aus, um die bestehende VPN-Verbindung sofort zu trennen und vollautomatisch eine neue IP-Adresse aus den Niederlande zu beziehen:
 `docker exec vpn kill -HUP 1`
 
 ### 🔍 IP-Adresse und Standort des Yahoo-Services prüfen

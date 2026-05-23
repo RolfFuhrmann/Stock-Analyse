@@ -163,41 +163,95 @@ class TestBullishEngulfing:
 
 
 class TestPiercingLine:
-    def test_erkannt_im_abwaertstrend(self):
-        # i2-Schluss=111, i3: Öffnung=113, Mitte=110.5, Tief=107
-        # i4: öffnet 106<107✓, Schluss=112>110.5✓, 112<=113✓, 112>c[i2]=111✓
+    def test_erkannt_klassisch(self):
+        # i2: bearish, i3: bearish mit langem Körper, schließt unter i2
+        # i4: bullish, öffnet unter Tief i3, schließt über 50% i3-Körper
+        # i3: Open=113, Close=108, Tief=106, Mitte=110.5
+        # i4: Open=105 < Tief 106 ✓, Schluss=112 > 110.5 ✓, ≤ 113 ✓
         df = make_df([
             make_bar(115, 116, 113, 114),
             make_bar(114, 115, 111, 112),
-            make_bar(113, 114, 110, 111),  # i2: Schluss=111
-            make_bar(113, 114, 107, 108),  # i3: bearish, Öffnung=113, Mitte=110.5, Tief=107
-            make_bar(106, 114, 105, 112),  # i4: Schluss=112 ≤ 113=o[i3] ✓, > 111=c[i2] ✓
+            make_bar(113, 114, 111, 112),  # i2: bearish
+            make_bar(113, 114, 106, 108),  # i3: bearish, Close=108 < i2-Close=112 ✓, Tief=106, Mitte=110.5
+            make_bar(105, 114, 104, 112),  # i4: Open=105 < 106 ✓, Schluss=112 ≤ 113 ✓
         ])
         r = detect_candle_pattern(df)
         assert r["pattern"] == "Piercing Line"
         assert r["strength"] == 2
 
+    def test_erkannt_ohne_strengen_gesamtkontext(self):
+        """Piercing Line erfordert nur i2 bearish + i3 schließt unter i2.
+        Der übergeordnete Trendkontext (i0, i1) spielt keine Rolle mehr."""
+        df = make_df([
+            make_bar(100, 102, 99, 101),   # i0: bullish – kein Abwärtstrend
+            make_bar(101, 103, 100, 102),  # i1: bullish
+            make_bar(113, 114, 111, 112),  # i2: bearish
+            make_bar(113, 114, 106, 108),  # i3: bearish, Close < i2-Close ✓, Tief=106, Mitte=110.5
+            make_bar(105, 114, 104, 112),  # i4: bullish, Open=105 < 106 ✓, Schluss=112 ✓
+        ])
+        r = detect_candle_pattern(df)
+        assert r["pattern"] == "Piercing Line"
+        assert r["strength"] == 2
+
+    def test_kein_piercing_wenn_i4_nicht_unter_tief_i3(self):
+        """i4 öffnet nicht unter dem Tief von i3."""
+        df = make_df([
+            make_bar(115, 116, 113, 114),
+            make_bar(114, 115, 111, 112),
+            make_bar(113, 114, 111, 112),
+            make_bar(113, 114, 106, 108),  # i3: Tief=106
+            make_bar(107, 114, 106, 112),  # i4: Open=107 > 106 → nicht unter Tief
+        ])
+        r = detect_candle_pattern(df)
+        assert r["pattern"] != "Piercing Line"
+
+    def test_kein_piercing_wenn_i3_nicht_unter_i2_schliesst(self):
+        """i3 schließt nicht unter i2 – kein Abwärtstrend."""
+        df = make_df([
+            make_bar(115, 116, 113, 114),
+            make_bar(114, 115, 111, 112),
+            make_bar(113, 114, 111, 108),  # i2: Close=108
+            make_bar(113, 114, 106, 109),  # i3: Close=109 > i2-Close=108 → kein Abwärtstrend
+            make_bar(105, 114, 104, 112),
+        ])
+        r = detect_candle_pattern(df)
+        assert r["pattern"] != "Piercing Line"
+
+    def test_kein_piercing_schluss_unter_mitte_i3(self):
+        """i4 schließt nicht über 50% des i3-Körpers."""
+        df = make_df([
+            make_bar(115, 116, 113, 114),
+            make_bar(114, 115, 111, 112),
+            make_bar(113, 114, 111, 112),  # i2: bearish
+            make_bar(113, 114, 106, 108),  # i3: Mitte=110.5
+            make_bar(105, 111, 104, 109),  # i4: Schluss=109 < Mitte 110.5
+        ])
+        r = detect_candle_pattern(df)
+        assert r["pattern"] != "Piercing Line"
+
     def test_piercing_wird_zu_engulfing_wenn_hoch_genug(self):
+        """Schließt i4 über der Öffnung von i3, greift Engulfing-Regel."""
         df = make_df([
             make_bar(112, 113, 110, 111),
             make_bar(111, 112, 108, 109),
-            make_bar(110, 111, 107, 108),
-            make_bar(108, 109, 103, 104),
-            make_bar(102, 112, 101, 110),  # Schluss=110 > Öffnung i3=108 → Engulfing
+            make_bar(110, 111, 107, 108),  # i2: bearish
+            make_bar(108, 109, 103, 104),  # i3: bearish
+            make_bar(102, 112, 101, 110),  # i4: Schluss=110 > Open i3=108 → Engulfing
         ])
         r = detect_candle_pattern(df)
         assert r["pattern"] == "Bullish Engulfing"
 
-    def test_kein_piercing_aufwaertstrend(self):
+    def test_kein_piercing_i2_bullish(self):
+        """i2 ist bullish – Abwärtskontext fehlt."""
         df = make_df([
-            make_bar(98, 100, 97, 99),
-            make_bar(99, 101, 98, 100),
-            make_bar(100, 102, 99, 101),
-            make_bar(101, 102, 97, 98),
-            make_bar(96, 102, 95, 101),
+            make_bar(110, 111, 109, 110),
+            make_bar(110, 111, 109, 110),
+            make_bar(108, 114, 107, 113),  # i2: bullish
+            make_bar(113, 114, 106, 108),  # i3: bearish
+            make_bar(105, 114, 104, 112),  # i4: bullish
         ])
         r = detect_candle_pattern(df)
-        assert r["pattern"] is None
+        assert r["pattern"] != "Piercing Line"
 
 
 class TestHammer:
