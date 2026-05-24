@@ -64,7 +64,26 @@ def detect_candle_pattern(df: pd.DataFrame) -> dict:
         span = h[i] - l[i]
         return span > 0 and body(i) / span < tolerance
 
-    # ── Abwärtskontext prüfen ─────────────────────────────────────────────
+    # ── 4. Piercing Line ─────────────────────────────────────────────────
+    # Nur 3 Kerzen: i2, i3, i4 – eigener Abwärtskontext, unabhängig von
+    # der globalen Trendprüfung. Wird daher vor dem Kontext-Block geprüft.
+    # i2: bearish – reicht als Abwärtskontext.
+    # i3: bearish, schließt unter i2-Schluss (Abwärtstrend bestätigt).
+    # i4: bullish, öffnet unter Tief i3, schließt über 50% des i3-Körpers
+    #     aber nicht über i3-Open (sonst Engulfing).
+    i3_midpoint = (o[i3] + c[i3]) / 2
+    if (
+        is_bearish(i2)
+        and is_bearish(i3)
+        and c[i3] < c[i2]            # i3 schließt unter i2 – Abwärtstrend
+        and is_bullish(i4)
+        and o[i4] < l[i3]            # öffnet unter Tief i3
+        and c[i4] > i3_midpoint      # schließt über 50% des i3-Körpers
+        and c[i4] <= o[i3]           # schließt nicht über i3-Open (sonst Engulfing)
+    ):
+        return {"pattern": "Piercing Line", "strength": 2}
+
+        # ── Abwärtskontext prüfen ─────────────────────────────────────────────
     # Bedingung A: 3 aufeinanderfolgende fallende Schlusskurse
     trend_falling = c[i0] > c[i1] > c[i2]
 
@@ -116,20 +135,6 @@ def detect_candle_pattern(df: pd.DataFrame) -> dict:
         and c[i4] > c[i2]         # Über Schluss i2 – echte Umkehr
     ):
         return {"pattern": "Bullish Engulfing", "strength": 3}
-
-    # ── 4. Piercing Line ─────────────────────────────────────────────────
-    # i3: bearish | i4: bullish, öffnet unter Tief i3, schließt über 50% i3-Körper
-    # i4-Schluss über i2-Schluss aber unter Öffnung i3 (sonst Engulfing)
-    i3_midpoint = (o[i3] + c[i3]) / 2
-    if (
-        is_bearish(i3)
-        and is_bullish(i4)
-        and o[i4] < l[i3]
-        and c[i4] > i3_midpoint
-        and c[i4] <= o[i3]
-        and c[i4] > c[i2]
-    ):
-        return {"pattern": "Piercing Line", "strength": 2}
 
     # ── 5. Hammer ────────────────────────────────────────────────────────
     # i4: kleiner Körper oben, langer unterer Schatten, kaum oberer Schatten.
