@@ -281,17 +281,17 @@ Für x86-Server/Linux-VM die `--platform`-Angabe entfernen.
 
 > Diese Sektion bitte nach jeder Session aktualisieren.
 
-- [ ] `TODO: trend_indicators.spy lockern, wie ursprünglich geplant. MACD unter der 0-Linie. Slow-Stocastik unter der 20 Linie.`
-- [ ] `TODO: Für candle_patterns.py jedes Pattern in eigenen Bereich kapseln. Gemeinsam genutzter Code in Utility auslagern.`
-- [ ] `TODO: Prüfung für Bullish Abandoned Baby und Morning Star 4 Kerzen. Kerze 0 bis 1 definiert den Abwwärtskontext. Kerze 2 definiert den Doji mit dem entsprfechenden Gap. und Kerze 3 die Grüne Aufwärtsbewegung mit dem entsprechenden Gap.`
-- [ ] `TODO: Prüfung für Piercing Line, Bullish Engulfing und Hammer 3 Kerzen. Kerze 0 bis 1 definiert den Abwwärtskontext. Kerze 2 iost zur Erkennung des Muster.`
+- [x] ~~`TODO: trend_indicators.py lockern. MACD unter der 0-Linie. Slow-Stochastik unter der 20-Linie.`~~ ✅ `macd_ok` prüft nur noch `is_negative`. `stoch_ok` prüft nur noch `k < 20`. `histogram_shrinking` und `k_rising` werden weiterhin berechnet, sind aber kein Pflichtkriterium.
+- [x] ~~`TODO: Für candle_patterns.py jedes Pattern in eigenen Bereich kapseln. Gemeinsam genutzter Code in Utility auslagern.`~~ ✅ Jedes Muster in eigener Funktion (`_detect_abandoned_baby`, `_detect_morning_star`, `_detect_engulfing`, `_detect_piercing`, `_detect_hammer`). Hilfsfunktionen in `_CandleUtils` ausgelagert.
+- [x] ~~`TODO: Prüfung für Bullish Abandoned Baby und Morning Star 4 Kerzen. Kerze 0 bis 1 definiert den Abwärtskontext. Kerze 2 definiert den Doji/Stern. Kerze 3 die Aufwärtsbewegung.`~~ ✅ Beide Muster nutzen `df.iloc[-4:]`. i0/i1 = Abwärtskontext (beide bearish, i1 schließt unter i0). i2 = Doji+Gap / Stern. i3 = bullische Umkehrkerze.
+- [x] ~~`TODO: Prüfung für Piercing Line, Bullish Engulfing und Hammer 3 Kerzen. Kerze 0 bis 1 definiert den Abwärtskontext. Kerze 2 ist zur Erkennung des Musters.`~~ ✅ Alle drei Muster nutzen `df.iloc[-3:]`. i0/i1 = Abwärtskontext. i2 = Mustererkennung.
 - [x] ~~`TODO: Im agent-service den indicators.py aufsplitten, so das der Bereich für die Trenderkennung (EW, Stochastik und MACD) gekapselt wird und der Bereich für die Kerzenformationen ebenfalls gekapselt wird.`~~ ✅ Aufgeteilt in `trend_indicators.py` (Elliott, MACD, Stochastik, evaluate_stock) und `candle_patterns.py`. `indicators.py` bleibt als Kompatibilitäts-Shim – kein Breaking Change in main.py.
 - [x] ~~`TODO: Das Testsetup mit in den Service integriert wird, so das die Tests manuell ausgeführt werden können. Die Testabdeckung soll mindestens 80% betragen.`~~ ✅ `tests/test_candle_patterns.py` + `tests/test_trend_indicators.py`, 50 Tests, Coverage 95%. Ausführen: `cd agent-service && pytest tests/ -v --cov=candle_patterns --cov=trend_indicators --cov-report=term-missing`
 - [x] ~~Yahoo-Abruf über VPN absichern.~~ ✅ `yahoo-service` läuft mit `network_mode: "container:vpn"` hinter Gluetun (WireGuard, Proton VPN). VPN-Konfiguration in Root `.env`.
 - [x] ~~Projekt für GitHub vorbereiten.~~ ✅ Root `.gitignore` + `.env.example` erstellt. `twelvedata-service/.env.example` ergänzt. Echter API-Key aus `.env` entfernt (Platzhalter). README Schnellstart korrigiert.
 
-**Zuletzt geändert:** 2026-05-18
-**Zuletzt bearbeitet von Claude:** VPN-Setup dokumentiert, GitHub-Sicherheits-Review (Root .gitignore, .env.example, API-Key-Bereinigung, CLAUDE.md vollständig aktualisiert)
+**Zuletzt geändert:** 2026-05-24
+**Zuletzt bearbeitet von Claude:** trend_indicators.py gelockert (MACD nur is_negative, Stochastik nur k<20). candle_patterns.py refactored (\_CandleUtils + je eine Funktion pro Muster). Alle Muster auf einheitliche i0/i1-Kontext-Struktur umgestellt (4 Kerzen: Abandoned Baby, Morning Star; 3 Kerzen: Engulfing, Piercing, Hammer). 27 Tests, alle grün.
 
 ---
 
