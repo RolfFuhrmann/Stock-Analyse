@@ -49,6 +49,7 @@ Nutzer wählen Ticker, Datenquelle und Zeitraum – der Agent analysiert und str
 ```
 
 **VPN-Routing:**
+
 - `yahoo-service` hat `network_mode: "container:vpn"` – teilt Netzwerk-Namespace mit Gluetun
 - Alle Yahoo-Anfragen gehen durch den WireGuard-Tunnel (Proton VPN, Standard: Niederlande)
 - Der VPN-Container erhält den Alias `yahoo-service` im `stock-net` und leitet Port 8011 weiter
@@ -105,11 +106,11 @@ src/app/
 
 ### 3.2 Agent Service (`agent-service/`)
 
-| Eigenschaft  | Wert                     |
-| ------------ | ------------------------ |
-| Sprache      | Python 3.12              |
-| Framework    | FastAPI + sse-starlette  |
-| Port         | 8010                     |
+| Eigenschaft  | Wert                       |
+| ------------ | -------------------------- |
+| Sprache      | Python 3.12                |
+| Framework    | FastAPI + sse-starlette    |
+| Port         | 8010                       |
 | Datenquellen | Yahoo Finance, Twelve Data |
 
 **Endpunkte:**
@@ -154,15 +155,16 @@ Die Testdateien enthalten `sys.path.insert(0, ...)` – kein `pip install -e .` 
 
 ### 3.3 Yahoo Service (`yahoo-service/`)
 
-| Eigenschaft  | Wert                                          |
-| ------------ | --------------------------------------------- |
-| Sprache      | Python 3.12                                   |
-| Framework    | FastAPI + sse-starlette                        |
-| Port (intern)| 8011 (erreichbar nur über VPN-Gateway-Alias)  |
-| Netzwerk     | `network_mode: "container:vpn"` – kein stock-net |
-| TLS-Tarnung  | `curl_cffi` mit `impersonate="chrome"`        |
+| Eigenschaft   | Wert                                             |
+| ------------- | ------------------------------------------------ |
+| Sprache       | Python 3.12                                      |
+| Framework     | FastAPI + sse-starlette                          |
+| Port (intern) | 8011 (erreichbar nur über VPN-Gateway-Alias)     |
+| Netzwerk      | `network_mode: "container:vpn"` – kein stock-net |
+| TLS-Tarnung   | `curl_cffi` mit `impersonate="chrome"`           |
 
 **Anti-Blocking-Strategie:**
+
 - Läuft isoliert im Netzwerk-Namespace des `vpn`-Containers
 - Externe IP = anonyme Proton VPN IP (Niederlande)
 - `curl_cffi` imitiert Chrome-TLS-Fingerabdruck
@@ -171,12 +173,12 @@ Die Testdateien enthalten `sys.path.insert(0, ...)` – kein `pip install -e .` 
 
 ### 3.4 TwelveData Service (`twelvedata-service/`)
 
-| Eigenschaft  | Wert                                |
-| ------------ | ----------------------------------- |
-| Sprache      | Python 3.12                         |
-| Framework    | FastAPI + sse-starlette              |
-| Port         | 8012                                |
-| Konfiguration| `twelvedata-service/.env` (API-Key) |
+| Eigenschaft   | Wert                                |
+| ------------- | ----------------------------------- |
+| Sprache       | Python 3.12                         |
+| Framework     | FastAPI + sse-starlette             |
+| Port          | 8012                                |
+| Konfiguration | `twelvedata-service/.env` (API-Key) |
 
 **Rate-Limit:** Free Plan max 8 Requests/Minute → fixer Delay von 7.5s zwischen Tickern.
 
@@ -279,6 +281,10 @@ Für x86-Server/Linux-VM die `--platform`-Angabe entfernen.
 
 > Diese Sektion bitte nach jeder Session aktualisieren.
 
+- [ ] `TODO: trend_indicators.spy lockern, wie ursprünglich geplant. MACD unter der 0-Linie. Slow-Stocastik unter der 20 Linie.`
+- [ ] `TODO: Für candle_patterns.py jedes Pattern in eigenen Bereich kapseln. Gemeinsam genutzter Code in Utility auslagern.`
+- [ ] `TODO: Prüfung für Bullish Abandoned Baby und Morning Star 4 Kerzen. Kerze 0 bis 1 definiert den Abwwärtskontext. Kerze 2 definiert den Doji mit dem entsprfechenden Gap. und Kerze 3 die Grüne Aufwärtsbewegung mit dem entsprechenden Gap.`
+- [ ] `TODO: Prüfung für Piercing Line, Bullish Engulfing und Hammer 3 Kerzen. Kerze 0 bis 1 definiert den Abwwärtskontext. Kerze 2 iost zur Erkennung des Muster.`
 - [x] ~~`TODO: Im agent-service den indicators.py aufsplitten, so das der Bereich für die Trenderkennung (EW, Stochastik und MACD) gekapselt wird und der Bereich für die Kerzenformationen ebenfalls gekapselt wird.`~~ ✅ Aufgeteilt in `trend_indicators.py` (Elliott, MACD, Stochastik, evaluate_stock) und `candle_patterns.py`. `indicators.py` bleibt als Kompatibilitäts-Shim – kein Breaking Change in main.py.
 - [x] ~~`TODO: Das Testsetup mit in den Service integriert wird, so das die Tests manuell ausgeführt werden können. Die Testabdeckung soll mindestens 80% betragen.`~~ ✅ `tests/test_candle_patterns.py` + `tests/test_trend_indicators.py`, 50 Tests, Coverage 95%. Ausführen: `cd agent-service && pytest tests/ -v --cov=candle_patterns --cov=trend_indicators --cov-report=term-missing`
 - [x] ~~Yahoo-Abruf über VPN absichern.~~ ✅ `yahoo-service` läuft mit `network_mode: "container:vpn"` hinter Gluetun (WireGuard, Proton VPN). VPN-Konfiguration in Root `.env`.

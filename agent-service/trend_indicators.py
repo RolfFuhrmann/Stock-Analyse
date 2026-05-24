@@ -27,8 +27,8 @@ def calc_macd(
 
     Signal gilt als erfüllt wenn:
       - Histogramm negativ (MACD unter Nulllinie)
-      - Mindestens 2 aufeinanderfolgende schrumpfende Balken am Ende
-        (nachlassender Abwärtsdruck)
+      histogram_shrinking wird weiterhin berechnet und steht für
+      weiterführende Auswertungen zur Verfügung, ist aber kein Pflichtkriterium.
 
     Parameter:
         closes: Schlusskurse als pd.Series
@@ -88,7 +88,7 @@ def calc_slow_stochastic(
 
     Signal gilt als erfüllt wenn:
       - %K unter 20 (überverkauft)
-      - %K steigt (dreht nach oben)
+      k_rising wird weiterhin berechnet, ist aber kein Pflichtkriterium.
 
     Parameter:
         df:       DataFrame mit Spalten high, low, close
@@ -119,7 +119,7 @@ def calc_slow_stochastic(
     return {
         "k":           round(float(k_val), 2),
         "d":           round(float(d_val), 2),
-        "is_oversold": bool(k_val < 20 and k_val > k_prev),
+        "is_oversold": bool(k_val < 20),  # Signal: %K unter 20
         "k_rising":    bool(k_val > k_prev),
     }
 
@@ -243,7 +243,7 @@ def evaluate_stock(df: pd.DataFrame, lookback: int = 90) -> dict:
     stoch   = calc_slow_stochastic(df, k_period=14, d_period=3)
     candle  = detect_candle_pattern(df)
 
-    macd_ok    = bool(macd["is_negative"] and macd["histogram_shrinking"]) if macd else False
+    macd_ok    = bool(macd["is_negative"]) if macd else False  # Signal: MACD-Histogramm unter 0
     stoch_ok   = bool(stoch["is_oversold"]) if stoch else False
     elliott_ok = elliott["ok"]
 
