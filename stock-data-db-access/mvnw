@@ -1,0 +1,67 @@
+#!/bin/sh
+# Maven Wrapper Script
+# ----------------------------------------------------------------------------
+# Licensed to the Apache Software Foundation (ASF) under one or more
+# contributor license agreements. See the NOTICE file distributed with
+# this work for additional information regarding copyright ownership.
+# The ASF licenses this file to You under the Apache License, Version 2.0
+# (the "License"); you may not use this file except in compliance with the
+# License. You may obtain a copy of the License at
+#     https://www.apache.org/licenses/LICENSE-2.0
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# ----------------------------------------------------------------------------
+
+set -e
+
+# Finde das Projektverzeichnis (wo pom.xml liegt)
+findMavenProjectBasedir() {
+    BASEDIR="$PWD"
+    WDIR="$BASEDIR"
+    while [ "$WDIR" != "/" ]; do
+        if [ -f "$WDIR/pom.xml" ]; then
+            BASEDIR="$WDIR"
+            break
+        fi
+        WDIR=$(dirname "$WDIR")
+    done
+    echo "$BASEDIR"
+}
+
+BASE_DIR=$(findMavenProjectBasedir)
+MAVEN_WRAPPER_PROPERTIES="$BASE_DIR/.mvn/wrapper/maven-wrapper.properties"
+
+# Lese distributionUrl aus den Properties
+if [ -f "$MAVEN_WRAPPER_PROPERTIES" ]; then
+    DISTRIBUTION_URL=$(grep "distributionUrl" "$MAVEN_WRAPPER_PROPERTIES" | sed 's/distributionUrl=//')
+else
+    echo "ERROR: .mvn/wrapper/maven-wrapper.properties not found" >&2
+    exit 1
+fi
+
+# Maven-Home aus URL ableiten
+MAVEN_FILENAME=$(basename "$DISTRIBUTION_URL")
+MAVEN_HOME_NAME=$(echo "$MAVEN_FILENAME" | sed 's/-bin\.zip//')
+MAVEN_USER_HOME="${MAVEN_USER_HOME:-$HOME/.m2/wrapper/dists}"
+MAVEN_HOME="$MAVEN_USER_HOME/$MAVEN_HOME_NAME"
+
+# Maven herunterladen falls noch nicht vorhanden
+if [ ! -d "$MAVEN_HOME" ]; then
+    mkdir -p "$MAVEN_HOME"
+    echo "Downloading Maven from $DISTRIBUTION_URL"
+    if command -v wget > /dev/null 2>&1; then
+        wget -q "$DISTRIBUTION_URL" -O "$MAVEN_HOME/$MAVEN_FILENAME"
+    elif command -v curl > /dev/null 2>&1; then
+        curl -fsSL "$DISTRIBUTION_URL" -o "$MAVEN_HOME/$MAVEN_FILENAME"
+    else
+        echo "ERROR: Neither wget nor curl found." >&2
+        exit 1
+    fi
+    unzip -q "$MAVEN_HOME/$MAVEN_FILENAME" -d "$MAVEN_USER_HOME"
+    rm -f "$MAVEN_HOME/$MAVEN_FILENAME"
+    MAVEN_HOME="$MAVEN_USER_HOME/$MAVEN_HOME_NAME"
+fi
+
+# Maven ausführen
+exec "$MAVEN_HOME/bin/mvn" "$@"

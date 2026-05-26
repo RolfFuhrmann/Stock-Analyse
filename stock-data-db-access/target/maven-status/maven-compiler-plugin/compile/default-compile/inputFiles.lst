@@ -1,0 +1,12 @@
+/Users/rolf/Documents/Projekte/Entwicklung/Stock Analyse/stock-data-db-access/src/main/java/rf/stock/data/db/access/App.java
+/Users/rolf/Documents/Projekte/Entwicklung/Stock Analyse/stock-data-db-access/src/main/java/rf/stock/data/db/access/busines/Exchange.java
+/Users/rolf/Documents/Projekte/Entwicklung/Stock Analyse/stock-data-db-access/src/main/java/rf/stock/data/db/access/busines/TickerDtos.java
+/Users/rolf/Documents/Projekte/Entwicklung/Stock Analyse/stock-data-db-access/src/main/java/rf/stock/data/db/access/busines/TickerListService.java
+/Users/rolf/Documents/Projekte/Entwicklung/Stock Analyse/stock-data-db-access/src/main/java/rf/stock/data/db/access/controller/TickerListController.java
+/Users/rolf/Documents/Projekte/Entwicklung/Stock Analyse/stock-data-db-access/src/main/java/rf/stock/data/db/access/exception/DuplicateResourceException.java
+/Users/rolf/Documents/Projekte/Entwicklung/Stock Analyse/stock-data-db-access/src/main/java/rf/stock/data/db/access/exception/GlobalExceptionHandler.java
+/Users/rolf/Documents/Projekte/Entwicklung/Stock Analyse/stock-data-db-access/src/main/java/rf/stock/data/db/access/exception/ResourceNotFoundException.java
+/Users/rolf/Documents/Projekte/Entwicklung/Stock Analyse/stock-data-db-access/src/main/java/rf/stock/data/db/access/model/TickerList.java
+/Users/rolf/Documents/Projekte/Entwicklung/Stock Analyse/stock-data-db-access/src/main/java/rf/stock/data/db/access/model/TickerSymbol.java
+/Users/rolf/Documents/Projekte/Entwicklung/Stock Analyse/stock-data-db-access/src/main/java/rf/stock/data/db/access/repository/TickerListRepository.java
+/Users/rolf/Documents/Projekte/Entwicklung/Stock Analyse/stock-data-db-access/src/main/java/rf/stock/data/db/access/repository/TickerSymbolRepository.java

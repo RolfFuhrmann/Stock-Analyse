@@ -36,13 +36,23 @@ Since Yahoo Finance uses aggressive anti-scraping mechanisms, the `yahoo-service
 
    Open `twelvedata-service/.env` and enter your API key from https://twelvedata.com.
 
-3. **Start the Platform: Docker Desktop must be running**
+3. **Set up Database Credentials:**
+
+   Add the following variables to your root `.env` (see `.env.example`):
+
+   ```
+   MYSQL_ROOT_PASSWORD=changeme
+   MYSQL_USER=stockuser
+   MYSQL_PASSWORD=changeme
+   ```
+
+4. **Start the Platform: Docker Desktop must be running**
 
 ```bash
   docker compose up -d --build
 ```
 
-4. **Open Web UI:**
+5. **Open Web UI:**
    Open `http://localhost:4200` in your browser.
 
 ---
@@ -73,6 +83,7 @@ To verify which public IP address and location the tunneled Yahoo service is act
 - **VPN Gateway (Port 8011):** Gluetun VPN · Forwards Port 8011 to Yahoo
 - **Yahoo Service (No Port):** Yahoo Finance · Runs tunneled inside the VPN network
 - **TwelveData Svc (Port 8012):** Twelve Data API · SSE · Delay 7.5s/Ticker
+- **DB Access Service (Port 8013):** MySQL · Ticker List Management · REST API
 - **Angular Client (Port 4200):** Web UI · Radio Buttons · Live Results
 
 ### Swagger Docs
@@ -80,6 +91,7 @@ To verify which public IP address and location the tunneled Yahoo service is act
 - Agent: http://localhost:8010/docs
 - Yahoo: http://localhost:8011/docs (provided via the VPN gateway)
 - TwelveData: http://localhost:8012/docs
+- DB Access: http://localhost:8013/swagger-ui.html
 
 ---
 
@@ -89,6 +101,122 @@ To verify which public IP address and location the tunneled Yahoo service is act
 - **Twelve Data:** US tickers (Free plan) (e.g., `AAPL`, `MSFT`, `JPM`)
 
 Enter them comma-separated in the Angular client: `AAPL, MSFT, JPM, ADS.DE` or load predefined lists.
+
+---
+
+## DB Access Service
+
+The `stock-data-db-access` service is a **Spring Boot 4 / Java 25** microservice that manages ticker lists (e.g., DAX 40, Dow Jones) in a MySQL 9 database. It is the single source of truth for all ticker symbols used across the platform.
+
+### Responsibilities
+
+- Create, update, and delete named ticker lists (e.g., `DAX40`, `DOW30`)
+- Add, update, and remove individual ticker symbols per list
+- Normalize raw symbols to Yahoo Finance format automatically based on the exchange (e.g., `ADS` + `XETRA` → `ADS.DE`)
+- Expose a dedicated endpoint that returns ready-to-use Yahoo symbols for the Agent Service
+
+### Data Model
+
+Each **ticker list** has a unique code (e.g., `DAX40`) and a set of **ticker symbols**. Every symbol stores:
+
+| Field          | Description                                                 | Example  |
+| -------------- | ----------------------------------------------------------- | -------- |
+| `raw_symbol`   | Symbol as entered by the user                               | `ADS`    |
+| `yahoo_symbol` | Normalized symbol for Yahoo Finance (auto-calculated)       | `ADS.DE` |
+| `exchange`     | Exchange enum: `XETRA`, `NYSE`, `NASDAQ`, `LSE`, `EURONEXT` | `XETRA`  |
+| `display_name` | Human-readable company name                                 | `Adidas` |
+
+### Key REST Endpoints
+
+| Method   | Path                                   | Description                                      |
+| -------- | -------------------------------------- | ------------------------------------------------ |
+| `GET`    | `/api/lists`                           | Get all ticker lists                             |
+| `GET`    | `/api/lists/{id}`                      | Get a list with all its symbols                  |
+| `GET`    | `/api/lists/code/{code}`               | Get a list by code (e.g., `DAX40`)               |
+| `GET`    | `/api/lists/code/{code}/yahoo-symbols` | Get Yahoo-normalized symbols — for Agent Service |
+| `POST`   | `/api/lists`                           | Create a new list                                |
+| `PUT`    | `/api/lists/{id}`                      | Update a list                                    |
+| `DELETE` | `/api/lists/{id}`                      | Delete a list and all its symbols                |
+| `POST`   | `/api/lists/{id}/symbols`              | Add a symbol to a list                           |
+| `PUT`    | `/api/lists/{id}/symbols/{symId}`      | Update a symbol                                  |
+| `DELETE` | `/api/lists/{id}/symbols/{symId}`      | Remove a symbol from a list                      |
+
+### Schema Migration
+
+Database schema is managed by **Flyway**. Migration scripts are located in `stock-data-db-access/src/main/resources/db/migration/`. On startup, Flyway applies any pending migrations automatically. The initial migration (`V1__init_schema.sql`) seeds both DAX 40 and Dow Jones ticker lists.
+
+### Running Tests
+
+```bash
+cd stock-data-db-access
+mvn test
+```
+
+---
+
+## Publishing a Service Image to Docker Hub
+
+To manually build and push a service image (e.g., after changes to `stock-data-db-access`), follow these steps.
+
+### Prerequisites
+
+- Docker Desktop is running
+- You are logged in: `docker login`
+
+### Build & Push
+
+**1. Build the image locally:**
+
+```bash
+# Replace <your-dockerhub-username> and <service-dir> as needed.
+# Example for stock-data-db-access:
+
+docker build \
+  --platform linux/arm64 \
+  -t <your-dockerhub-username>/stock-data-db-access:latest \
+  ./stock-data-db-access
+```
+
+**2. Optionally tag with a version:**
+
+```bash
+docker tag \
+  <your-dockerhub-username>/stock-data-db-access:latest \
+  <your-dockerhub-username>/stock-data-db-access:1.0.0
+```
+
+**3. Push to Docker Hub:**
+
+```bash
+docker push <your-dockerhub-username>/stock-data-db-access:latest
+
+# Push the version tag as well if you created one:
+docker push <your-dockerhub-username>/stock-data-db-access:1.0.0
+```
+
+**4. Use the remote image in `docker-compose.yml`** (instead of building locally):
+
+```yaml
+db-service:
+  image: <your-dockerhub-username>/stock-data-db-access:latest
+  # build:               ← comment this out when using a pre-built image
+  #   context: ./stock-data-db-access
+```
+
+### Push All Services at Once
+
+To rebuild and push every service in one go:
+
+```bash
+DOCKER_USER=<your-dockerhub-username>
+
+for SERVICE in agent-service yahoo-service twelvedata-service angular-client stock-data-db-access; do
+  docker build --platform linux/arm64 -t $DOCKER_USER/$SERVICE:latest ./$SERVICE
+  docker push $DOCKER_USER/$SERVICE:latest
+done
+```
+
+> **Note:** The `vpn` container uses the public `qmcgaw/gluetun` image and does not need to be pushed.
 
 ---
 
@@ -109,6 +237,10 @@ Enter them comma-separated in the Angular client: `AAPL, MSFT, JPM, ADS.DE` or l
   - `src/app/app.component.ts` - UI · Radio Buttons · Live Table
   - `src/app/analysis.service.ts` - SSE Client
   - `Dockerfile` & `angular.json`
+- **stock-data-db-access/**
+  - `src/main/java/rf/stock/data/db/access/` - Spring Boot application
+  - `src/main/resources/db/migration/` - Flyway SQL migrations
+  - `Dockerfile` & `pom.xml`
 
 ---
 

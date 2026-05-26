@@ -77,6 +77,51 @@ services:
     networks:
       - stock-net
 
+  # ── MySQL 9.7 Datenbank ────────────────────────────────────────
+  mysql-db:
+    image: mysql:9.7
+    platform: linux/arm64
+    container_name: stock_data_db
+    restart: unless-stopped
+    environment:
+      - MYSQL_ROOT_PASSWORD=${MYSQL_ROOT_PASSWORD}
+      - MYSQL_DATABASE=stock_data
+      - MYSQL_USER=${MYSQL_USER}
+      - MYSQL_PASSWORD=${MYSQL_PASSWORD}
+    volumes:
+      - mysql_data:/var/lib/mysql
+    ports:
+    - "3306:3306"
+    networks:
+      - stock-net
+    healthcheck:
+      test: ["CMD", "mysqladmin", "ping", "-h", "localhost", "-u", "root", "-p${MYSQL_ROOT_PASSWORD}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
+
+  # ── DB Access Service (:8013) ────────────────────────────────
+  db-service:
+    build:
+      context: ./stock-data-db-access
+      dockerfile: Dockerfile
+    container_name: stock_db_access
+    restart: unless-stopped
+    ports:
+      - "8013:8013"
+    environment:
+      - DB_HOST=mysql-db
+      - DB_PORT=3306
+      - DB_NAME=stock_data
+      - DB_USER=${MYSQL_USER}
+      - DB_PASSWORD=${MYSQL_PASSWORD}
+    depends_on:
+      mysql-db:
+        condition: service_healthy
+    networks:
+      - stock-net
+
   # ── Angular Client (:4200) ───────────────────────────────────
   angular-client:
     build:
@@ -94,3 +139,6 @@ services:
 networks:
   stock-net:
     driver: bridge
+
+volumes:
+  mysql_data:
