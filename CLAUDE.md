@@ -281,6 +281,8 @@ Für x86-Server/Linux-VM die `--platform`-Angabe entfernen.
 
 > Diese Sektion bitte nach jeder Session aktualisieren.
 
+- [ ] ~~`TODO: Erstelle einen DB-Access Service für MySQL97 die eigenständig im Docker läuft. Der Service soll alle Verwaltungsfunktionen zum anlegen, ändern und löschen für Listen (DAX, DOW Jones etc.) mit Tickersymbole abdecken. Dazu gehört auch das Datenmodell mit den entsprechenden Enititäten. Es soll auch berücksichtigt werden, das die Datenbeschaffung die Tickersybole anders aufbereitet werden müssen. Ich denke die speicherung des Börsenplatzes (XETRA, USA) sollte dem genüge tun.`~~
+
 - [x] ~~`TODO: trend_indicators.py lockern. MACD unter der 0-Linie. Slow-Stochastik unter der 20-Linie.`~~ ✅ `macd_ok` prüft nur noch `is_negative`. `stoch_ok` prüft nur noch `k < 20`. `histogram_shrinking` und `k_rising` werden weiterhin berechnet, sind aber kein Pflichtkriterium.
 - [x] ~~`TODO: Für candle_patterns.py jedes Pattern in eigenen Bereich kapseln. Gemeinsam genutzter Code in Utility auslagern.`~~ ✅ Jedes Muster in eigener Funktion (`_detect_abandoned_baby`, `_detect_morning_star`, `_detect_engulfing`, `_detect_piercing`, `_detect_hammer`). Hilfsfunktionen in `_CandleUtils` ausgelagert.
 - [x] ~~`TODO: Prüfung für Bullish Abandoned Baby und Morning Star 4 Kerzen. Kerze 0 bis 1 definiert den Abwärtskontext. Kerze 2 definiert den Doji/Stern. Kerze 3 die Aufwärtsbewegung.`~~ ✅ Beide Muster nutzen `df.iloc[-4:]`. i0/i1 = Abwärtskontext (beide bearish, i1 schließt unter i0). i2 = Doji+Gap / Stern. i3 = bullische Umkehrkerze.
