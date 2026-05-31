@@ -281,7 +281,17 @@ Für x86-Server/Linux-VM die `--platform`-Angabe entfernen.
 
 > Diese Sektion bitte nach jeder Session aktualisieren.
 
-- [ ] ~~`TODO: Erstelle einen DB-Access Service für MySQL97 die eigenständig im Docker läuft. Der Service soll alle Verwaltungsfunktionen zum anlegen, ändern und löschen für Listen (DAX, DOW Jones etc.) mit Tickersymbole abdecken. Dazu gehört auch das Datenmodell mit den entsprechenden Enititäten. Es soll auch berücksichtigt werden, das die Datenbeschaffung die Tickersybole anders aufbereitet werden müssen. Ich denke die speicherung des Börsenplatzes (XETRA, USA) sollte dem genüge tun.`~~
+- [ ] `TODO: Umbennen indicators.py in bullish_reversal_indicator.py und bullish_candle_pattern_reversal.py `
+
+- [] `TODO: Erstellen einer bearishen Umkehr Erkennung bearish_reversal_indicator.py, mit einer Aufährtsteigende Elliot Wave mindestens 1-2-3, das MACD-Histogram über 0 und die Slow Stochastik über 80.`
+
+- [] `TODO: Erstellen einer bearisch_candle_pattern_reversal.py für Bearish Abandoned Baby, Dark Cloud Cover, Bearish Engulfing und Shooting Star.`
+
+- [] `TODO: Im angular-clientwird die Spalte Trend mit bullish oder bearish gefüllt. Je nach erkennung im *indikator.py. Die Spalte Umkehrformation wird umbennant in Candlestick Pattern.`
+
+- [x] ~~`TODO: Den angular-client so ändern, das auf der Startseite eine Kachel mit den vorhanden Abruflisten angezeigt wird (via stock-data-db-access). Hinter jeder Liste ist ein Button zur Bearbeitung der Listen. Die Bearbeitung oder eine Neuanlage erfolgt in einer weiteren Kachel rechts daneben. Wird eine Abrufliste angecklickt, werden die Tickersymbole aus der Liste in dem bereits bestehnde Eingabefeld übernommen. Die Buttons für DAX und DOW Jones werden nicht mehr benötigt und werden entfernt. Unter den Abruflisten gibt es einen weiteren Button zum anlegen einer neuen Abrufliste. Das Bearbeitungsfenster wird je nach ART (Bearbeiten oder Neuanlage entsprechend in itialisiert.)`~~
+
+- [x] ~~`TODO: Erstelle einen DB-Access Service für MySQL97 die eigenständig im Docker läuft. Der Service soll alle Verwaltungsfunktionen zum anlegen, ändern und löschen für Listen (DAX, DOW Jones etc.) mit Tickersymbole abdecken. Dazu gehört auch das Datenmodell mit den entsprechenden Enititäten. Es soll auch berücksichtigt werden, das die Datenbeschaffung die Tickersybole anders aufbereitet werden müssen. Ich denke die speicherung des Börsenplatzes (XETRA, USA) sollte dem genüge tun.`~~
 
 - [x] ~~`TODO: trend_indicators.py lockern. MACD unter der 0-Linie. Slow-Stochastik unter der 20-Linie.`~~ ✅ `macd_ok` prüft nur noch `is_negative`. `stoch_ok` prüft nur noch `k < 20`. `histogram_shrinking` und `k_rising` werden weiterhin berechnet, sind aber kein Pflichtkriterium.
 - [x] ~~`TODO: Für candle_patterns.py jedes Pattern in eigenen Bereich kapseln. Gemeinsam genutzter Code in Utility auslagern.`~~ ✅ Jedes Muster in eigener Funktion (`_detect_abandoned_baby`, `_detect_morning_star`, `_detect_engulfing`, `_detect_piercing`, `_detect_hammer`). Hilfsfunktionen in `_CandleUtils` ausgelagert.

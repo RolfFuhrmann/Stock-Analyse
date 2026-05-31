@@ -1,5 +1,5 @@
 # ── Build Stage ──────────────────────────────────────────────────────────────
-FROM --platform=linux/arm64 eclipse-temurin:25-jdk-alpine AS build
+FROM --platform=linux/arm64 eclipse-temurin:21-jdk-alpine AS build
 
 WORKDIR /app
 
@@ -15,7 +15,7 @@ COPY src ./src
 RUN ./mvnw package -DskipTests -q
 
 # ── Runtime Stage ─────────────────────────────────────────────────────────────
-FROM --platform=linux/arm64 eclipse-temurin:25-jre-alpine
+FROM --platform=linux/arm64 eclipse-temurin:21-jre-alpine
 
 WORKDIR /app
 

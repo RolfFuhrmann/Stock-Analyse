@@ -10,28 +10,6 @@ import rf.stock.data.db.access.busines.TickerListService;
 
 import java.util.List;
 
-/**
- * REST-Controller für die Listen-Verwaltung.
- *
- * Basis-URL: /api/lists
- *
- * Listen:
- *   GET    /api/lists                        → alle Listen (ohne Symbole)
- *   GET    /api/lists/{id}                   → Liste mit allen Symbolen
- *   GET    /api/lists/code/{code}            → Liste per Code (z.B. "DAX40")
- *   POST   /api/lists                        → neue Liste anlegen
- *   PUT    /api/lists/{id}                   → Liste umbenennen/beschreiben
- *   DELETE /api/lists/{id}                   → Liste + alle Symbole löschen
- *
- * Symbole:
- *   GET    /api/lists/{id}/symbols           → alle Symbole einer Liste
- *   POST   /api/lists/{id}/symbols           → Symbol hinzufügen
- *   PUT    /api/lists/{id}/symbols/{symId}   → Symbol ändern
- *   DELETE /api/lists/{id}/symbols/{symId}   → Symbol entfernen
- *
- * Agent-Service Integration:
- *   GET    /api/lists/code/{code}/yahoo-symbols → nur yahoo_symbols (für Analyse-Requests)
- */
 @RestController
 @RequestMapping("/api/lists")
 @RequiredArgsConstructor
@@ -57,10 +35,10 @@ public class TickerListController {
         return ResponseEntity.ok(service.getListByCode(code.toUpperCase()));
     }
 
-    /** Gibt nur die yahoo_symbols zurück – für den agent-service direkt verwendbar. */
-    @GetMapping("/code/{code}/yahoo-symbols")
-    public ResponseEntity<YahooSymbolsResponse> getYahooSymbols(@PathVariable String code) {
-        return ResponseEntity.ok(service.getYahooSymbols(code.toUpperCase()));
+    /** raw_symbols + source – für den agent-service direkt verwendbar. */
+    @GetMapping("/code/{code}/raw-symbols")
+    public ResponseEntity<RawSymbolsResponse> getRawSymbols(@PathVariable String code) {
+        return ResponseEntity.ok(service.getRawSymbols(code.toUpperCase()));
     }
 
     @PostMapping
