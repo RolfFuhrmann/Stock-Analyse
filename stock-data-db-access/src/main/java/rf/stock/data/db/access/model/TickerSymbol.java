@@ -26,17 +26,10 @@ public class TickerSymbol {
     @JoinColumn(name = "list_id", nullable = false)
     private TickerList tickerList;
 
-    /** Roh-Ticker wie vom Nutzer eingegeben, z.B. "ADS" oder "AAPL". */
+    /** Roh-Ticker wie vom Nutzer eingegeben, z.B. "ADS" oder "AAPL".
+     *  Die Yahoo-Normalisierung (.DE-Suffix für XETRA) erfolgt im Angular-Client. */
     @Column(name = "raw_symbol", nullable = false, length = 20)
     private String rawSymbol;
-
-    /** Normalisierter Ticker für Yahoo Finance, z.B. "ADS.DE". */
-    @Column(name = "yahoo_symbol", nullable = false, length = 20)
-    private String yahooSymbol;
-
-    @Enumerated(EnumType.STRING)
-    @Column(nullable = false, length = 20)
-    private Exchange exchange;
 
     @Column(name = "display_name", length = 100)
     private String displayName;
@@ -49,10 +42,6 @@ public class TickerSymbol {
 
     @PrePersist
     protected void onCreate() {
-        // yahoo_symbol wird automatisch berechnet falls nicht explizit gesetzt
-        if (yahooSymbol == null || yahooSymbol.isBlank()) {
-            yahooSymbol = exchange.normalizeForYahoo(rawSymbol);
-        }
         createdAt = LocalDateTime.now();
         updatedAt = LocalDateTime.now();
     }

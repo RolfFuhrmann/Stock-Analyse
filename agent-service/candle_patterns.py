@@ -3,14 +3,14 @@ candle_patterns.py – Bullische Umkehrformationen
 Gekapselte Erkennung unabhängig von den Trendindikatoren.
 
 Unterstützte Muster (Priorität / Stärke):
-  1. Bullish Abandoned Baby  (5) – 4-Kerzen: i0–i1 Kontext, i2 Doji+Gap, i3 bullish+Gap
-  2. Morning Star            (4) – 4-Kerzen: i0–i1 Kontext, i2 Stern, i3 bullish
-  3. Bullish Engulfing       (3) – 3-Kerzen: i0–i1 Kontext, i2 umschließt i1
-  4. Piercing Line           (2) – 3-Kerzen: i0–i1 Kontext, i2 durchdringt i1
-  5. Hammer                  (1) – 3-Kerzen: i0–i1 Kontext, i2 Hammer-Form
+  1. Bullish Abandoned Baby  (5) – 4-Kerzen: i0–i3 Kontext, i2 Doji+Gap, i3 bullish+Gap
+  2. Morning Star            (4) – 4-Kerzen: i0–i3 Kontext, i2 Stern, i3 bullish
+  3. Bullish Engulfing       (3) – 3-Kerzen: i0–i2 Kontext, i2 umschließt i1
+  4. Piercing Line           (2) – 3-Kerzen: i0–i2 Kontext, i2 durchdringt i1
+  5. Hammer                  (1) – 3-Kerzen: i0–i2 Kontext, i2 Hammer-Form
 
-Jedes Muster ist in einer eigenen Funktion gekapselt.
-Gemeinsame Hilfsfunktionen sind in _CandleUtils ausgelagert.
+Wichtig: Die letzte (noch laufende) Kerze wird grundsätzlich ausgeschlossen.
+         Nur abgeschlossene Kerzen werden analysiert.
 """
 
 import pandas as pd
@@ -90,21 +90,27 @@ def _detect_morning_star(u: _CandleUtils) -> bool:
     Muster:
       i1: große bearishe Kerze
       i2: kleiner Körper (Stern) unterhalb des i1-Körpers
-      i3: bullish, schließt über Mitte des i1-Körpers
+      i3: bullish, Körper muss mindestens 60% des i1-Körpers betragen
+          UND über 50% des i1-Körpers schließen – erst dann ist die
+          Bestätigung stark genug für eine echte Umkehr.
     """
     o, h, l, c = u.o, u.h, u.l, u.c
     # Abwärtskontext
     if not (u.is_bearish(0) and u.is_bearish(1) and c[1] < c[0]):
         return False
-    # Muster
+
     avg_body    = (u.body(1) + u.body(2) + u.body(3)) / 3
     midpoint_i1 = u.midpoint(1)
+
     return (
         u.is_bearish(1) and u.body(1) > avg_body * 0.8
         and u.body(2) < u.body(1) * 0.4
         and max(o[2], c[2]) < min(o[1], c[1])  # Stern liegt unter i1-Körper
         and u.is_bullish(3)
-        and c[3] > midpoint_i1                  # i3 schließt über Mitte i1
+        # i3 muss kräftig genug sein: Körper ≥ 50% von i1
+        and u.body(3) >= u.body(1) * 0.5
+        # i3 schließt deutlich über Mitte i1 (70% statt 50%)
+        and c[3] > o[1] - u.body(1) * 0.3
     )
 
 
@@ -194,11 +200,12 @@ def _detect_hammer(u: _CandleUtils) -> bool:
 
 def detect_candle_pattern(df: pd.DataFrame) -> dict:
     """
-    Erkennt bullische Umkehrformationen.
+    Erkennt bullische Umkehrformationen aus abgeschlossenen Kerzen.
 
-    Benötigt mindestens 4 Zeilen (für 4-Kerzen-Muster).
-    Für 3-Kerzen-Muster werden die letzten 3 Kerzen verwendet,
-    für 4-Kerzen-Muster die letzten 4 Kerzen.
+    Die letzte Kerze im DataFrame wird als laufend (unfertig) betrachtet
+    und grundsätzlich ausgeschlossen. Die Analyse arbeitet auf df.iloc[:-1].
+
+    Benötigt mindestens 5 Zeilen (4 abgeschlossene + 1 laufende).
 
     Parameter:
         df: DataFrame mit Spalten open, high, low, close (lowercase).
@@ -208,11 +215,14 @@ def detect_candle_pattern(df: pd.DataFrame) -> dict:
           pattern  (str | None) – Name des Musters oder None
           strength (int)        – Stärke 0–5
     """
-    if len(df) < 4:
+    # Letzte (laufende) Kerze ausschließen
+    closed = df.iloc[:-1]
+
+    if len(closed) < 4:
         return {"pattern": None, "strength": 0}
 
-    # ── 4-Kerzen-Muster: letzte 4 Kerzen (i0–i3) ─────────────────────────
-    w4 = df.iloc[-4:].reset_index(drop=True)
+    # ── 4-Kerzen-Muster: letzte 4 abgeschlossene Kerzen (i0–i3) ──────────
+    w4 = closed.iloc[-4:].reset_index(drop=True)
     u4 = _CandleUtils(
         w4["open"].values, w4["high"].values,
         w4["low"].values,  w4["close"].values,
@@ -224,8 +234,8 @@ def detect_candle_pattern(df: pd.DataFrame) -> dict:
     if _detect_morning_star(u4):
         return {"pattern": "Morning Star", "strength": 4}
 
-    # ── 3-Kerzen-Muster: letzte 3 Kerzen (i0–i2) ─────────────────────────
-    w3 = df.iloc[-3:].reset_index(drop=True)
+    # ── 3-Kerzen-Muster: letzte 3 abgeschlossene Kerzen (i0–i2) ──────────
+    w3 = closed.iloc[-3:].reset_index(drop=True)
     u3 = _CandleUtils(
         w3["open"].values, w3["high"].values,
         w3["low"].values,  w3["close"].values,

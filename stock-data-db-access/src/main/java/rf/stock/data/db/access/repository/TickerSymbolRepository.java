@@ -18,11 +18,11 @@ public interface TickerSymbolRepository extends JpaRepository<TickerSymbol, Long
 
     boolean existsByTickerListIdAndRawSymbol(Long listId, String rawSymbol);
 
-    /** Liefert alle yahoo_symbols einer Liste – direkt verwendbar für den agent-service. */
-    @Query("SELECT ts.yahooSymbol FROM TickerSymbol ts WHERE ts.tickerList.id = :listId")
-    List<String> findYahooSymbolsByListId(@Param("listId") Long listId);
+    /** Liefert alle raw_symbols einer Liste. */
+    @Query("SELECT ts.rawSymbol FROM TickerSymbol ts WHERE ts.tickerList.id = :listId")
+    List<String> findRawSymbolsByListId(@Param("listId") Long listId);
 
-    /** Dasselbe per Listen-Code (z.B. "DAX40") – praktischer für den agent-service. */
-    @Query("SELECT ts.yahooSymbol FROM TickerSymbol ts WHERE ts.tickerList.code = :listCode")
-    List<String> findYahooSymbolsByListCode(@Param("listCode") String listCode);
+    /** Dasselbe per Listen-Code. */
+    @Query("SELECT ts.rawSymbol FROM TickerSymbol ts WHERE ts.tickerList.code = :listCode")
+    List<String> findRawSymbolsByListCode(@Param("listCode") String listCode);
 }
