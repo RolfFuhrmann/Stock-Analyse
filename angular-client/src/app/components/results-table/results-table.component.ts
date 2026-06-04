@@ -6,7 +6,7 @@ import { MatTooltipModule } from '@angular/material/tooltip';
 import { MatIconModule } from '@angular/material/icon';
 import { StockResult } from '../../models/stock.models';
 
-type SortColumn = 'ticker' | 'price' | 'trend' | 'elliott' | 'stochastic' | 'macd' | 'score' | 'candle';
+type SortColumn = 'ticker' | 'name' | 'price' | 'trend' | 'direction' | 'elliott' | 'stochastic' | 'macd' | 'score' | 'candle';
 type SortDir = 'asc' | 'desc' | null;
 
 /**
@@ -42,13 +42,23 @@ type SortDir = 'asc' | 'desc' | null;
           </td>
         </ng-container>
 
+        <!-- Name -->
+        <ng-container matColumnDef="name">
+          <th mat-header-cell *matHeaderCellDef class="col-left sortable-header" (click)="sortBy('name')">
+            Name <mat-icon class="sort-icon">{{ sortIcon('name') }}</mat-icon>
+          </th>
+          <td mat-cell *matCellDef="let row" class="col-name">
+            {{ row.name ?? '–' }}
+          </td>
+        </ng-container>
+
         <!-- Kurs -->
         <ng-container matColumnDef="price">
           <th mat-header-cell *matHeaderCellDef class="col-right sortable-header" (click)="sortBy('price')">
             Kurs <mat-icon class="sort-icon">{{ sortIcon('price') }}</mat-icon>
           </th>
           <td mat-cell *matCellDef="let row" class="col-right numeric">
-            {{ row.current_price != null ? '$ ' + row.current_price.toFixed(2) : '–' }}
+            {{ row.current_price != null ? currencySymbol(row.ticker) + ' ' + row.current_price.toFixed(2) : '–' }}
           </td>
         </ng-container>
 
@@ -63,6 +73,22 @@ type SortDir = 'asc' | 'desc' | null;
             {{ row.trend_pct != null
                ? ((row.trend_pct >= 0 ? '+' : '') + row.trend_pct.toFixed(1) + '%')
                : '–' }}
+          </td>
+        </ng-container>
+
+        <!-- Richtung -->
+        <ng-container matColumnDef="direction">
+          <th mat-header-cell *matHeaderCellDef class="col-center sortable-header" (click)="sortBy('direction')">
+            Richtung <mat-icon class="sort-icon">{{ sortIcon('direction') }}</mat-icon>
+          </th>
+          <td mat-cell *matCellDef="let row" class="col-center">
+            @if (row.trend_direction === 'bullish') {
+              <span class="direction-bullish">▲ Bullish</span>
+            } @else if (row.trend_direction === 'bearish') {
+              <span class="direction-bearish">▼ Bearish</span>
+            } @else {
+              <span class="direction-none">–</span>
+            }
           </td>
         </ng-container>
 
@@ -109,7 +135,7 @@ type SortDir = 'asc' | 'desc' | null;
         <!-- Umkehrformation -->
         <ng-container matColumnDef="candle">
           <th mat-header-cell *matHeaderCellDef class="col-candle sortable-header" (click)="sortBy('candle')">
-            Umkehrformation <mat-icon class="sort-icon">{{ sortIcon('candle') }}</mat-icon>
+            Candlestick Pattern <mat-icon class="sort-icon">{{ sortIcon('candle') }}</mat-icon>
           </th>
           <td mat-cell *matCellDef="let row" class="col-candle">
             @if (row.candle_pattern) {
@@ -246,6 +272,35 @@ type SortDir = 'asc' | 'desc' | null;
     .candle-s1 { background: #f3f4f6; color: #374151; border: 1px solid #e5e7eb; }
     .candle-none { color: #d1d5db; font-size: 13px; }
 
+    .direction-bullish {
+      display: inline-block;
+      padding: 3px 10px;
+      border-radius: 20px;
+      font-size: 12px;
+      font-weight: 600;
+      background: #dcfce7;
+      color: #166534;
+    }
+    .direction-bearish {
+      display: inline-block;
+      padding: 3px 10px;
+      border-radius: 20px;
+      font-size: 12px;
+      font-weight: 600;
+      background: #fee2e2;
+      color: #991b1b;
+    }
+    .direction-none { color: #d1d5db; font-size: 13px; }
+
+    .col-name {
+      font-size: 12px;
+      color: #6b7280;
+      max-width: 200px;
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+
     .legend {
       display: flex;
       align-items: center;
@@ -263,7 +318,7 @@ export class ResultsTableComponent {
   readonly results = input.required<StockResult[]>();
 
   readonly displayedColumns = [
-    'ticker', 'price', 'trend',
+    'ticker', 'name', 'price', 'trend', 'direction',
     'elliott', 'stochastic', 'macd', 'score', 'candle'
   ];
 
@@ -283,12 +338,14 @@ export class ResultsTableComponent {
       const f = dir === 'asc' ? 1 : -1;
       switch (col) {
         case 'ticker':     return f * a.ticker.localeCompare(b.ticker);
+        case 'name':       return f * ((a.name ?? '').localeCompare(b.name ?? ''));
         case 'price':      return f * ((a.current_price ?? -Infinity) - (b.current_price ?? -Infinity));
         case 'trend':      return f * ((a.trend_pct ?? -Infinity) - (b.trend_pct ?? -Infinity));
         case 'elliott':    return f * (Number(a.elliott_wave) - Number(b.elliott_wave));
         case 'stochastic': return f * (Number(a.stochastic) - Number(b.stochastic));
         case 'macd':       return f * (Number(a.macd_histogram) - Number(b.macd_histogram));
         case 'score':      return f * (a.criteria_met - b.criteria_met);
+        case 'direction':  return f * ((a.trend_direction ?? '').localeCompare(b.trend_direction ?? ''));
         case 'candle':     return f * ((a.candle_strength ?? 0) - (b.candle_strength ?? 0));
         default:           return 0;
       }
@@ -311,6 +368,11 @@ export class ResultsTableComponent {
   sortIcon(col: SortColumn): string {
     if (this.sortColumn() !== col || !this.sortDir()) return 'unfold_more';
     return this.sortDir() === 'asc' ? 'arrow_upward' : 'arrow_downward';
+  }
+
+  /** Währungssymbol aus Ticker ableiten – XETRA (.DE) → €, sonst $ */
+  currencySymbol(ticker: string): string {
+    return ticker.toUpperCase().endsWith('.DE') ? '€' : '$';
   }
 
   badgeClass(value: boolean): string {

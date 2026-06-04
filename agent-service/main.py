@@ -2,7 +2,7 @@
 agent-service/main.py
 KI-Agent: Empfängt Ticker-Liste + Datenquelle (yahoo|twelvedata),
 abonniert SSE vom gewählten Data Service,
-analysiert jeden Ticker (Elliott Wave, MACD, Slow Stochastik)
+analysiert jeden Ticker auf bullische UND bearische Umkehrsignale
 und pusht das Ergebnis sofort per SSE an den Angular Client.
 
 Stop-Mechanismus:
@@ -19,12 +19,14 @@ from typing import AsyncGenerator, Literal
 
 import httpx
 import pandas as pd
+import yfinance as yf
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 from sse_starlette.sse import EventSourceResponse
 
-from indicators import evaluate_stock
+from bullish_reversal_indicator import evaluate_stock
+from bearish_reversal_indicator import evaluate_bearish_stock
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s")
 logger = logging.getLogger(__name__)
@@ -32,7 +34,7 @@ logger = logging.getLogger(__name__)
 app = FastAPI(
     title="Stock Analysis Agent",
     description="Technische Analyse via SSE: Elliott Wave · MACD · Slow Stochastik",
-    version="2.1.0",
+    version="3.0.0",
 )
 
 app.add_middleware(
@@ -47,9 +49,34 @@ TWELVEDATA_SERVICE_URL = os.getenv("TWELVEDATA_SERVICE_URL", "http://twelvedata-
 LOOKBACK_DAYS          = int(os.getenv("LOOKBACK_DAYS", 90))
 
 # ── Session-Registry ─────────────────────────────────────────
-# Speichert pro session_id ein asyncio.Event.
-# Wird beim Stop gesetzt → Stream bricht nach dem aktuellen Ticker ab.
 _stop_events: dict[str, asyncio.Event] = {}
+
+# ── Name-Cache ────────────────────────────────────────────────
+# Ticker → Unternehmensname, einmalig geholt und gecacht.
+_name_cache: dict[str, str] = {}
+
+
+def _get_ticker_name(ticker: str) -> str | None:
+    """
+    Holt den Unternehmensnamen via yfinance.fast_info (kein vollständiger API-Call).
+    Ergebnis wird gecacht – pro Analyse-Run wird jeder Ticker nur einmal abgefragt.
+    """
+    if ticker in _name_cache:
+        return _name_cache[ticker]
+    try:
+        info = yf.Ticker(ticker).fast_info
+        # fast_info liefert kein longName – Fallback auf info nur wenn nötig
+        name = getattr(info, "long_name", None) or getattr(info, "short_name", None)
+        if not name:
+            # Vollständiger info-Call als Fallback (langsamer)
+            full = yf.Ticker(ticker).info
+            name = full.get("longName") or full.get("shortName")
+        if name:
+            _name_cache[ticker] = name
+            return name
+    except Exception as e:
+        logger.debug(f"Name-Lookup fehlgeschlagen für {ticker}: {e}")
+    return None
 
 
 # ── Models ───────────────────────────────────────────────────
@@ -58,7 +85,7 @@ class AnalyzeRequest(BaseModel):
     tickers: list[str]
     source: Literal["yahoo", "twelvedata"] = "yahoo"
     lookback_days: int = LOOKBACK_DAYS
-    session_id: str = ""          # Vom Client vergeben; leer = kein Stop möglich
+    session_id: str = ""
 
 
 class StopRequest(BaseModel):
@@ -67,8 +94,11 @@ class StopRequest(BaseModel):
 
 class StockResult(BaseModel):
     ticker: str
+    name: str | None = None          # Unternehmensname aus Yahoo/TwelveData
     current_price: float | None = None
     trend_pct: float | None = None
+    # Richtung der erkannten Umkehr: "bullish", "bearish" oder None
+    trend_direction: str | None = None
     elliott_wave: bool
     stochastic: bool
     macd_histogram: bool
@@ -82,12 +112,26 @@ class StockResult(BaseModel):
 # ── Analyse ───────────────────────────────────────────────────
 
 def analyse_quote(quote: dict, lookback: int, source: str) -> StockResult:
-    """Analysiert einen einzelnen Ticker-Quote aus dem Data Service."""
+    """
+    Analysiert einen einzelnen Ticker-Quote.
+    Führt bullische UND bearische Erkennung durch.
+    Die stärkere Erkennung (mehr Kriterien erfüllt) gewinnt.
+    Bei Gleichstand hat bullisch Vorrang (konservativere Einschätzung).
+    """
     ticker = quote.get("ticker", "?")
+
+    # Name aus Quote – falls nicht vorhanden via yfinance nachladen
+    name = (
+        quote.get("longName")
+        or quote.get("shortName")
+        or quote.get("name")
+        or _get_ticker_name(ticker)
+    )
 
     if quote.get("error") or not quote.get("bars"):
         return StockResult(
             ticker=ticker,
+            name=name,
             elliott_wave=False, stochastic=False, macd_histogram=False,
             criteria_met=0, source=source,
             error=quote.get("error", "Keine Kursdaten"),
@@ -109,7 +153,25 @@ def analyse_quote(quote: dict, lookback: int, source: str) -> StockResult:
                 criteria_met=0, source=source, error="Zu wenig Datenpunkte",
             )
 
-        result      = evaluate_stock(df, lookback=lookback)
+        # ── Bullische Auswertung ──────────────────────────────
+        bull = evaluate_stock(df, lookback=lookback)
+
+        # ── Bearische Auswertung ──────────────────────────────
+        bear = evaluate_bearish_stock(df, lookback=lookback)
+
+        # ── Richtung bestimmen ────────────────────────────────
+        # Die Seite mit mehr erfüllten Kriterien gewinnt.
+        # Bei Gleichstand: bullisch (vorsichtigere Einschätzung).
+        if bear["criteria_met"] > bull["criteria_met"]:
+            result          = bear
+            trend_direction = "bearish"
+        elif bull["criteria_met"] > 0:
+            result          = bull
+            trend_direction = "bullish"
+        else:
+            result          = bull
+            trend_direction = None
+
         price       = round(df["close"].iloc[-1], 2)
         start_price = df["close"].iloc[-min(lookback, len(df))]
         trend_pct   = round((price - start_price) / start_price * 100, 2)
@@ -117,13 +179,15 @@ def analyse_quote(quote: dict, lookback: int, source: str) -> StockResult:
         logger.info(
             f"  {ticker}: Elliott={result['elliott_ok']} "
             f"Stoch={result['stoch_ok']} MACD={result['macd_ok']} "
-            f"[{result['criteria_met']}/3]"
+            f"[{result['criteria_met']}/3] dir={trend_direction}"
         )
 
         return StockResult(
             ticker=ticker,
+            name=name,
             current_price=price,
             trend_pct=trend_pct,
+            trend_direction=trend_direction,
             elliott_wave=result["elliott_ok"],
             stochastic=result["stoch_ok"],
             macd_histogram=result["macd_ok"],
@@ -137,6 +201,7 @@ def analyse_quote(quote: dict, lookback: int, source: str) -> StockResult:
         logger.error(f"{ticker}: Analyse-Fehler – {e}")
         return StockResult(
             ticker=ticker,
+            name=name if 'name' in dir() else None,
             elliott_wave=False, stochastic=False, macd_histogram=False,
             criteria_met=0, source=source, error=str(e),
         )
@@ -150,11 +215,6 @@ async def analysis_stream(
     lookback: int,
     session_id: str,
 ) -> AsyncGenerator:
-    """
-    Abonniert SSE vom gewählten Data Service.
-    Pro empfangenem Quote: Analyse durchführen, Ergebnis sofort pushen.
-    Prüft nach jedem verarbeiteten Ticker das Stop-Event der Session.
-    """
     service_url = (
         YAHOO_SERVICE_URL if source == "yahoo" else TWELVEDATA_SERVICE_URL
     )
@@ -176,7 +236,6 @@ async def analysis_stream(
 
             async for line in response.aiter_lines():
 
-                # Stop-Signal vom Client prüfen – nach jeder Zeile reagierbar
                 if stop_event and stop_event.is_set():
                     logger.info(f"Stream gestoppt (session={session_id})")
                     yield {
@@ -215,7 +274,6 @@ async def analysis_stream(
                     event_type = "message"
                     buffer = ""
 
-    # Session aufräumen
     _stop_events.pop(session_id, None)
 
 
@@ -233,20 +291,9 @@ def health():
 
 @app.post("/analyze/stream")
 async def stream_analysis(request: AnalyzeRequest):
-    """
-    SSE-Endpoint für Angular Client.
-    Empfängt Ticker + Datenquelle, streamt Analyseergebnisse pro Ticker.
-
-    session_id: Vom Client vergeben – ermöglicht gezielten Stop via /analyze/stop.
-
-    Events:
-      result – StockResult JSON pro analysiertem Ticker
-      done   – Abschluss-Signal (normal oder durch Stop)
-    """
     if not request.tickers:
         return {"error": "Ticker-Liste ist leer"}
 
-    # Stop-Event für diese Session registrieren
     session_id = request.session_id or str(uuid.uuid4())
     _stop_events[session_id] = asyncio.Event()
 
@@ -257,11 +304,6 @@ async def stream_analysis(request: AnalyzeRequest):
 
 @app.post("/analyze/stop")
 async def stop_analysis(request: StopRequest):
-    """
-    Setzt das Stop-Event für die angegebene session_id.
-    Der laufende Stream bricht nach dem aktuell verarbeiteten Ticker ab.
-    Dadurch wird auch der Abruf im Data Service (yahoo/twelvedata) unterbrochen.
-    """
     event = _stop_events.get(request.session_id)
     if event:
         event.set()

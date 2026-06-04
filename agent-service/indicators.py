@@ -1,18 +1,21 @@
 """
 indicators.py – Kompatibilitäts-Shim
-
-Importiert alle Funktionen aus den aufgesplitteten Modulen:
-  - trend_indicators.py  (Elliott Wave, MACD, Stochastik, evaluate_stock)
-  - candle_patterns.py   (Kerzenformationen)
-
-main.py importiert weiterhin von hier – kein Breaking Change.
+Leitet alle Aufrufe an die neuen gekapselten Module weiter.
+Kein Breaking Change für bestehende Imports.
 """
 
-from trend_indicators import (   # noqa: F401
+from bullish_reversal_indicator import (
+    evaluate_stock,
+    detect_elliott_abc,
     calc_macd,
     calc_slow_stochastic,
-    detect_elliott_abc,
-    evaluate_stock,
 )
+from bullish_candle_pattern_reversal import detect_candle_pattern
 
-from candle_patterns import detect_candle_pattern  # noqa: F401
+__all__ = [
+    "evaluate_stock",
+    "detect_elliott_abc",
+    "calc_macd",
+    "calc_slow_stochastic",
+    "detect_candle_pattern",
+]
