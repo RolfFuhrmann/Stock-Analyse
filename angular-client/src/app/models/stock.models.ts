@@ -3,8 +3,11 @@ export type TickerFormat = 'RAW' | 'XETRA' | 'CUSTOM';
 
 export interface StockResult {
   ticker: string;
+  name: string | null;
   current_price: number | null;
   trend_pct: number | null;
+  /** Erkannte Richtung der Umkehr: "bullish", "bearish" oder null */
+  trend_direction: 'bullish' | 'bearish' | null;
   elliott_wave: boolean;
   stochastic: boolean;
   macd_histogram: boolean;
