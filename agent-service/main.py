@@ -97,7 +97,7 @@ class StockResult(BaseModel):
     name: str | None = None          # Unternehmensname aus Yahoo/TwelveData
     current_price: float | None = None
     trend_pct: float | None = None
-    # Richtung der erkannten Umkehr: "bullish", "bearish" oder None
+    # Richtung des aktuellen Trends: "bullish", "bearish" oder None
     trend_direction: str | None = None
     elliott_wave: bool
     stochastic: bool
@@ -115,8 +115,16 @@ def analyse_quote(quote: dict, lookback: int, source: str) -> StockResult:
     """
     Analysiert einen einzelnen Ticker-Quote.
     Führt bullische UND bearische Erkennung durch.
-    Die stärkere Erkennung (mehr Kriterien erfüllt) gewinnt.
-    Bei Gleichstand hat bullisch Vorrang (konservativere Einschätzung).
+
+    Semantik der Indikatoren:
+      bull-Indikator erkennt: Abwärtswelle + MACD<0 + Stoch<20
+        → der aktuelle Markttrend ist BEARISH
+      bear-Indikator erkennt: Aufwärtswelle + MACD>0 + Stoch>80
+        → der aktuelle Markttrend ist BULLISH
+
+    trend_direction zeigt den aktuellen Trend (nicht die erwartete Umkehrrichtung).
+    Die Seite mit mehr erfüllten Kriterien gewinnt.
+    Bei Gleichstand: bearish (konservativere Einschätzung).
     """
     ticker = quote.get("ticker", "?")
 
@@ -153,21 +161,23 @@ def analyse_quote(quote: dict, lookback: int, source: str) -> StockResult:
                 criteria_met=0, source=source, error="Zu wenig Datenpunkte",
             )
 
-        # ── Bullische Auswertung ──────────────────────────────
+        # ── Bullische Auswertung (erkennt bearishen Markt) ───────
         bull = evaluate_stock(df, lookback=lookback)
 
-        # ── Bearische Auswertung ──────────────────────────────
+        # ── Bearische Auswertung (erkennt bullishen Markt) ───────
         bear = evaluate_bearish_stock(df, lookback=lookback)
 
         # ── Richtung bestimmen ────────────────────────────────
+        # bull-Indikator angeschlagen → Abwärtswelle/MACD<0/Stoch<20 → Trend ist BEARISH
+        # bear-Indikator angeschlagen → Aufwärtswelle/MACD>0/Stoch>80 → Trend ist BULLISH
         # Die Seite mit mehr erfüllten Kriterien gewinnt.
-        # Bei Gleichstand: bullisch (vorsichtigere Einschätzung).
+        # Bei Gleichstand: bearish (konservativere Einschätzung).
         if bear["criteria_met"] > bull["criteria_met"]:
             result          = bear
-            trend_direction = "bearish"
+            trend_direction = "bullish"   # bear-Signal = aktuell bullisher Markt
         elif bull["criteria_met"] > 0:
             result          = bull
-            trend_direction = "bullish"
+            trend_direction = "bearish"   # bull-Signal = aktuell bearisher Markt
         else:
             result          = bull
             trend_direction = None

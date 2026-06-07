@@ -281,13 +281,13 @@ Für x86-Server/Linux-VM die `--platform`-Angabe entfernen.
 
 > Diese Sektion bitte nach jeder Session aktualisieren.
 
-- [ ] `TODO: Umbennen indicators.py in bullish_reversal_indicator.py und bullish_candle_pattern_reversal.py `
+- [ ] ~~`TODO: Umbennen indicators.py in bullish_reversal_indicator.py und bullish_candle_pattern_reversal.py `~~
 
-- [] `TODO: Erstellen einer bearishen Umkehr Erkennung bearish_reversal_indicator.py, mit einer Aufährtsteigende Elliot Wave mindestens 1-2-3, das MACD-Histogram über 0 und die Slow Stochastik über 80.`
+- [] ~~`TODO: Erstellen einer bearishen Umkehr Erkennung bearish_reversal_indicator.py, mit einer Aufährtsteigende Elliot Wave mindestens 1-2-3, das MACD-Histogram über 0 und die Slow Stochastik über 80.`~~
 
-- [] `TODO: Erstellen einer bearisch_candle_pattern_reversal.py für Bearish Abandoned Baby, Dark Cloud Cover, Bearish Engulfing und Shooting Star.`
+- [] ~~`TODO: Erstellen einer bearisch_candle_pattern_reversal.py für Bearish Abandoned Baby, Dark Cloud Cover, Bearish Engulfing und Shooting Star.`~~
 
-- [] `TODO: Im angular-clientwird die Spalte Trend mit bullish oder bearish gefüllt. Je nach erkennung im *indikator.py. Die Spalte Umkehrformation wird umbennant in Candlestick Pattern.`
+- [x] ~~`TODO: Im angular-client wird die Spalte Trend mit bullish oder bearish gefüllt. Je nach Erkennung im *indikator.py. Die Spalte Umkehrformation wird umbenannt in Candlestick Pattern.`~~ ✅ `trend_direction` zeigt den **aktuellen Markttrend** (nicht die Umkehrerwartung). `bull`-Indikator angeschlagen (Abwärtswelle/MACD<0/Stoch<20) → `"bearish"`. `bear`-Indikator angeschlagen (Aufwärtswelle/MACD>0/Stoch>80) → `"bullish"`. Korrektur in `main.py` (`analyse_quote`).
 
 - [x] ~~`TODO: Den angular-client so ändern, das auf der Startseite eine Kachel mit den vorhanden Abruflisten angezeigt wird (via stock-data-db-access). Hinter jeder Liste ist ein Button zur Bearbeitung der Listen. Die Bearbeitung oder eine Neuanlage erfolgt in einer weiteren Kachel rechts daneben. Wird eine Abrufliste angecklickt, werden die Tickersymbole aus der Liste in dem bereits bestehnde Eingabefeld übernommen. Die Buttons für DAX und DOW Jones werden nicht mehr benötigt und werden entfernt. Unter den Abruflisten gibt es einen weiteren Button zum anlegen einer neuen Abrufliste. Das Bearbeitungsfenster wird je nach ART (Bearbeiten oder Neuanlage entsprechend in itialisiert.)`~~
 
@@ -302,8 +302,8 @@ Für x86-Server/Linux-VM die `--platform`-Angabe entfernen.
 - [x] ~~Yahoo-Abruf über VPN absichern.~~ ✅ `yahoo-service` läuft mit `network_mode: "container:vpn"` hinter Gluetun (WireGuard, Proton VPN). VPN-Konfiguration in Root `.env`.
 - [x] ~~Projekt für GitHub vorbereiten.~~ ✅ Root `.gitignore` + `.env.example` erstellt. `twelvedata-service/.env.example` ergänzt. Echter API-Key aus `.env` entfernt (Platzhalter). README Schnellstart korrigiert.
 
-**Zuletzt geändert:** 2026-05-24
-**Zuletzt bearbeitet von Claude:** trend_indicators.py gelockert (MACD nur is_negative, Stochastik nur k<20). candle_patterns.py refactored (\_CandleUtils + je eine Funktion pro Muster). Alle Muster auf einheitliche i0/i1-Kontext-Struktur umgestellt (4 Kerzen: Abandoned Baby, Morning Star; 3 Kerzen: Engulfing, Piercing, Hammer). 27 Tests, alle grün.
+**Zuletzt geändert:** 2026-06-07
+**Zuletzt bearbeitet von Claude:** `main.py` – `trend_direction`-Logik korrigiert. `bull`-Indikator (Abwärtswelle + MACD<0 + Stoch<20) → Label `"bearish"` (aktueller Trend). `bear`-Indikator (Aufwärtswelle + MACD>0 + Stoch>80) → Label `"bullish"` (aktueller Trend). Hintergrund: Die Indikatoren sind als Umkehrsignal-Detektoren gebaut – `trend_direction` zeigt jetzt den aktuellen Markttrend, nicht die erwartete Umkehrrichtung. Workflow-Dokumentation ergänzt (Abschnitt 9).
 
 ---
 
@@ -318,3 +318,32 @@ Für x86-Server/Linux-VM die `--platform`-Angabe entfernen.
 - **Secrets** – `.env`-Dateien niemals committen. Immer die `.env.example`-Vorlage aktuell halten wenn neue Variablen hinzukommen.
 - **Plattform** – `--platform=linux/arm64` in allen Dockerfiles (Apple Silicon). Bei x86-Änderungen immer erwähnen.
 - Bei Unklarheiten zuerst fragen, dann implementieren
+
+---
+
+## 9. Analyse-Workflow & Systemdesign-Entscheidungen
+
+### Zweistufiger Analyse-Workflow
+
+```
+Stufe 1 – Automatisches Screening (agent-service)
+  ├── Elliott Wave + MACD + Stochastik → trend_direction (bullish / bearish)
+  ├── Score 0–3 → Priorisierung (3/3 = stärkstes Signal)
+  └── Candlestick Pattern → erster Hinweis auf mögliche Umkehr
+
+Stufe 2 – Manuelle Qualitätsprüfung (nur bei Score 2/3 oder 3/3)
+  ├── Fibonacci-Retracements einzeichnen
+  ├── Cluster-Analyse (GDs, frühere Tiefs/Hochs, Volumenknotenpunkte)
+  └── Endgültige Handelsentscheidung
+```
+
+### Semantik der Indikatoren (wichtig!)
+
+Die Indikator-Dateien sind als **Umkehrsignal-Detektoren** konzipiert:
+
+| Datei                           | Erkennt diese Marktbedingung      | `trend_direction` in main.py |
+| ------------------------------- | --------------------------------- | ---------------------------- |
+| `bullish_reversal_indicator.py` | Abwärtswelle + MACD<0 + Stoch<20  | `"bearish"`                  |
+| `bearish_reversal_indicator.py` | Aufwärtswelle + MACD>0 + Stoch>80 | `"bullish"`                  |
+
+**Regel:** `trend_direction` zeigt den **aktuellen Markttrend**, nicht die erwartete Umkehrrichtung. Der Name der Indikator-Datei beschreibt die _erwartete_ Umkehr, nicht den aktuellen Zustand. Diese Invertierung ist in `main.py` (`analyse_quote`) explizit kommentiert und darf nicht ohne Weiteres geändert werden.
