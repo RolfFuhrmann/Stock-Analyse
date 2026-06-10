@@ -46,9 +46,11 @@ services:
     environment:
       - YAHOO_SERVICE_URL=http://yahoo-service:8011
       - TWELVEDATA_SERVICE_URL=http://twelvedata-service:8012
+      - ML_SERVICE_URL=http://ml-service:8015
     depends_on:
       - vpn
       - twelvedata-service
+      - ml-service
     networks:
       - stock-net
 
@@ -122,6 +124,61 @@ services:
     networks:
       - stock-net
 
+  # ── History Fetcher (:8014) ──────────────────────────────────
+  history-fetcher:
+    build:
+      context: ./history-fetcher
+      dockerfile: Dockerfile
+    container_name: stock_history_fetcher
+    restart: unless-stopped
+    ports:
+      - "8014:8014"
+    environment:
+      - YAHOO_SERVICE_URL=http://yahoo-service:8011
+      - TWELVEDATA_SERVICE_URL=http://twelvedata-service:8012
+      - DB_SERVICE_URL=http://db-service:8013
+      # Erstbefüllung beim ersten Start automatisch ausführen (true/false)
+      - AUTO_INITIAL_RUN=true
+      # Täglicher Update-Lauf um 20:00 Uhr (nach Börsenschluss)
+      - DAILY_UPDATE_HOUR=20
+      - DAILY_UPDATE_MINUTE=0
+      # 5 Jahre Tagesdaten, 12 Monate Stundendaten
+      - INITIAL_DAILY_DAYS=1825
+      - INITIAL_HOURLY_HOURS=8760
+    depends_on:
+      - db-service
+      - vpn
+      - twelvedata-service
+    networks:
+      - stock-net
+
+  # ── ML Service (:8015) ───────────────────────────────────────
+  ml-service:
+    build:
+      context: ./ml-service
+      dockerfile: Dockerfile
+    container_name: stock_ml_service
+    restart: unless-stopped
+    ports:
+      - "8015:8015"
+    environment:
+      - DB_SERVICE_URL=http://db-service:8013
+      # Forecast-Horizont in Tagen (Umkehr in den nächsten N Tagen)
+      - FORECAST_HORIZON=5
+      # Mindest-Preisänderung % für eine Umkehr
+      - REVERSAL_THRESHOLD_PCT=3.0
+      # Wöchentliches Retraining: Sonntag 02:00 Uhr
+      - RETRAIN_WEEKDAY=6
+      - RETRAIN_HOUR=2
+      - RETRAIN_MINUTE=0
+    volumes:
+      # Modell bleibt nach Container-Neustart erhalten
+      - ml_models:/app/models
+    depends_on:
+      - db-service
+    networks:
+      - stock-net
+
   # ── Angular Client (:4200) ───────────────────────────────────
   angular-client:
     build:
@@ -142,3 +199,4 @@ networks:
 
 volumes:
   mysql_data:
+  ml_models:

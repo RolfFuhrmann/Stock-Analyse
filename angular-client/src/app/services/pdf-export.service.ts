@@ -65,7 +65,12 @@ export class PdfExportService {
     .score-2 { background: #fef9c3; color: #854d0e; }
     .score-1, .score-0 { background: #f3f4f6; color: #9ca3af; }
     /* Umkehrformation Badges */
-    .candle-badge { display: inline-block; padding: 2px 7px; border-radius: 20px; font-size: 9px; font-weight: 500; white-space: nowrap; }
+    .ml-badge { display:inline-block; padding:2px 7px; border-radius:10px; font-size:9px; font-weight:600; }
+      .ml-none     { background:#f3f4f6; color:#9ca3af; }
+      .ml-weak     { background:#fef9c3; color:#854d0e; }
+      .ml-moderate { background:#ffedd5; color:#9a3412; }
+      .ml-strong   { background:#fee2e2; color:#991b1b; }
+      .candle-badge { display: inline-block; padding: 2px 7px; border-radius: 20px; font-size: 9px; font-weight: 500; white-space: nowrap; }
     .candle-s5 { background: #fce7f3; color: #9d174d; }
     .candle-s4 { background: #ede9fe; color: #5b21b6; }
     .candle-s3 { background: #dbeafe; color: #1e40af; }
@@ -113,7 +118,7 @@ export class PdfExportService {
   </table>
 
   <div class="footer">
-    Elliott Wave · Stochastik · MACD-Histogramm · Umkehrformationen · Stock Analyse Platform
+    Elliott Wave · Stochastik · MACD-Histogramm · Candlestick Pattern · KI-Umkehrsignal · Stock Analyse Platform
   </div>
 </body>
 </html>`;
@@ -131,6 +136,11 @@ export class PdfExportService {
     const candle   = r.candle_pattern
       ? `<span class="candle-badge candle-s${r.candle_strength}">${r.candle_pattern}</span>`
       : '–';
+    const mlSignal: Record<string, string> = { strong: '🔥 Stark', moderate: '↑ Mittel', weak: '~ Schwach', none: '–' };
+    const mlClass:  Record<string, string> = { strong: 'ml-strong', moderate: 'ml-moderate', weak: 'ml-weak', none: 'ml-none' };
+    const ml = r.ml_available && r.reversal_pct != null
+      ? `<span class="ml-badge ${mlClass[r.ml_signal] ?? 'ml-none'}">${r.reversal_pct.toFixed(0)}% ${mlSignal[r.ml_signal] ?? ''}</span>`
+      : '–';
 
     return `<tr class="${rowClass}">
       <td><span class="ticker-name">${r.ticker}</span>${r.error ? `<div style="color:#ef4444;font-size:9px">${r.error}</div>` : ''}</td>
@@ -141,6 +151,7 @@ export class PdfExportService {
       <td class="td-center">${badge(r.macd_histogram)}</td>
       <td class="td-center">${score}</td>
       <td class="td-left">${candle}</td>
+      <td class="td-center">${ml}</td>
     </tr>`;
   }
 }

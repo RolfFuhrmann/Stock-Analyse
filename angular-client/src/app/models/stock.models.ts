@@ -15,6 +15,13 @@ export interface StockResult {
   source: string;
   candle_pattern: string | null;
   candle_strength: number;
+  // ── ML-Signal ──────────────────────────────────────────
+  reversal_prob:  number | null;
+  reversal_pct:   number | null;
+  ml_signal:      'none' | 'weak' | 'moderate' | 'strong';
+  ml_confidence:  'low' | 'medium' | 'high';
+  ml_available:   boolean;
+  // ───────────────────────────────────────────────────────
   error: string | null;
 }
 
