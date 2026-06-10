@@ -3,6 +3,11 @@ twelvedata-service/main.py
 Liefert OHLCV-Kursdaten via Twelve Data API.
 Push (SSE): pro verarbeitetem Ticker wird sofort ein Event gesendet.
 Delay zwischen Tickern verhindert API-Rate-Limiting.
+
+Änderungen v2:
+  - QuoteRequest akzeptiert jetzt optionalen `interval`-Parameter
+    ("1day" für Tagesdaten, "1h" für Stundendaten)
+  - Default bleibt "1day" – vollständig rückwärtskompatibel
 """
 
 import asyncio
@@ -23,7 +28,7 @@ logger = logging.getLogger(__name__)
 app = FastAPI(
     title="Stock Twelve Data Service",
     description="OHLCV-Kursdaten via Twelve Data API mit SSE-Push pro Ticker.",
-    version="1.0.0",
+    version="2.0.0",
 )
 
 app.add_middleware(
@@ -39,12 +44,17 @@ API_KEY = os.getenv("TWELVE_DATA_API_KEY", "")
 # Twelve Data Free Plan: 8 Requests/Minute → ~7.5s Pause
 FETCH_DELAY = 7.5
 
+# Erlaubte Intervalle – Schutz vor ungültigen Werten
+VALID_INTERVALS = {"1min", "5min", "15min", "30min", "1h", "2h", "4h", "1day", "1week", "1month"}
+
 
 # ── Models ───────────────────────────────────────────────────
 
 class QuoteRequest(BaseModel):
     tickers: list[str]
     outputsize: int = 180
+    # Neu: interval-Parameter – Default "1day" für Rückwärtskompatibilität
+    interval: str = "1day"
 
 
 class OHLCVBar(BaseModel):
@@ -64,14 +74,24 @@ class TickerQuote(BaseModel):
 
 # ── Twelve Data Abruf ─────────────────────────────────────────
 
-async def fetch_ticker(client: httpx.AsyncClient, ticker: str, outputsize: int) -> TickerQuote:
-    """Ruft OHLCV-Tagesdaten für einen Ticker von Twelve Data ab."""
+async def fetch_ticker(
+    client: httpx.AsyncClient,
+    ticker: str,
+    outputsize: int,
+    interval: str = "1day",
+) -> TickerQuote:
+    """Ruft OHLCV-Daten für einen Ticker von Twelve Data ab."""
     if not API_KEY:
         return TickerQuote(ticker=ticker, bars=[], error="TWELVE_DATA_API_KEY nicht gesetzt")
 
+    # Ungültiges Interval → Fallback auf 1day
+    if interval not in VALID_INTERVALS:
+        logger.warning(f"{ticker}: Ungültiges interval '{interval}' – Fallback auf 1day")
+        interval = "1day"
+
     params = {
         "symbol":     ticker,
-        "interval":   "1day",
+        "interval":   interval,
         "outputsize": outputsize,
         "apikey":     API_KEY,
         "format":     "JSON",
@@ -85,7 +105,7 @@ async def fetch_ticker(client: httpx.AsyncClient, ticker: str, outputsize: int) 
 
         if "values" not in data:
             msg = data.get("message", "Keine Daten von Twelve Data")
-            logger.warning(f"{ticker}: {msg}")
+            logger.warning(f"{ticker} [{interval}]: {msg}")
             return TickerQuote(ticker=ticker, bars=[], error=msg)
 
         bars = []
@@ -102,7 +122,7 @@ async def fetch_ticker(client: httpx.AsyncClient, ticker: str, outputsize: int) 
             except (KeyError, ValueError):
                 continue
 
-        logger.info(f"{ticker}: {len(bars)} Bars geladen")
+        logger.info(f"{ticker} [{interval}]: {len(bars)} Bars geladen")
         return TickerQuote(ticker=ticker, bars=bars)
 
     except httpx.HTTPError as e:
@@ -112,18 +132,24 @@ async def fetch_ticker(client: httpx.AsyncClient, ticker: str, outputsize: int) 
 
 # ── SSE Generator ─────────────────────────────────────────────
 
-async def quote_stream(tickers: list[str], outputsize: int) -> AsyncGenerator:
+async def quote_stream(
+    tickers: list[str],
+    outputsize: int,
+    interval: str,
+) -> AsyncGenerator:
     """Sendet pro Ticker sofort ein SSE-Event nach dem Abruf."""
     async with httpx.AsyncClient() as client:
         for i, ticker in enumerate(tickers):
-            quote = await fetch_ticker(client, ticker, outputsize)
+            quote = await fetch_ticker(client, ticker, outputsize, interval)
 
             yield {
                 "event": "quote",
                 "data": quote.model_dump_json(),
             }
 
-            # Twelve Data Free Plan: max 8 req/min → 7.5s Pause
+            # Delay nur zwischen Tickern im selben Stream-Request.
+            # Wenn der history-fetcher einzelne Ticker schickt, wartet er
+            # selbst (twelvedata_delay_sec in data_client.py).
             if i < len(tickers) - 1:
                 logger.debug(f"  Pause {FETCH_DELAY}s (Free Plan Rate-Limit)")
                 await asyncio.sleep(FETCH_DELAY)
@@ -135,7 +161,12 @@ async def quote_stream(tickers: list[str], outputsize: int) -> AsyncGenerator:
 
 @app.get("/health")
 def health():
-    return {"status": "ok", "service": "twelvedata-service"}
+    return {
+        "status":   "ok",
+        "service":  "twelvedata-service",
+        "version":  "2.0.0",
+        "interval": "configurable (default: 1day)",
+    }
 
 
 @app.post("/quotes/stream")
@@ -143,9 +174,16 @@ async def stream_quotes(request: QuoteRequest):
     """
     SSE-Endpoint: Sendet pro Ticker sofort ein 'quote'-Event.
     Abschluss wird mit 'done'-Event signalisiert.
+
+    interval: "1day" (Standard) oder "1h" für Stundendaten
     """
     if not request.tickers:
         return {"error": "Ticker-Liste ist leer"}
 
-    logger.info(f"SSE-Stream gestartet für {len(request.tickers)} Ticker: {request.tickers}")
-    return EventSourceResponse(quote_stream(request.tickers, request.outputsize))
+    logger.info(
+        f"SSE-Stream: {len(request.tickers)} Ticker, "
+        f"interval={request.interval}, outputsize={request.outputsize}"
+    )
+    return EventSourceResponse(
+        quote_stream(request.tickers, request.outputsize, request.interval)
+    )

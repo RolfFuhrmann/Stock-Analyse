@@ -6,7 +6,7 @@ import { MatTooltipModule } from '@angular/material/tooltip';
 import { MatIconModule } from '@angular/material/icon';
 import { StockResult } from '../../models/stock.models';
 
-type SortColumn = 'ticker' | 'name' | 'price' | 'trend' | 'direction' | 'elliott' | 'stochastic' | 'macd' | 'score' | 'candle';
+type SortColumn = 'ticker' | 'name' | 'price' | 'trend' | 'direction' | 'elliott' | 'stochastic' | 'macd' | 'score' | 'candle' | 'ml';
 type SortDir = 'asc' | 'desc' | null;
 
 /**
@@ -149,6 +149,31 @@ type SortDir = 'asc' | 'desc' | null;
           </td>
         </ng-container>
 
+        <!-- ML Umkehrwahrscheinlichkeit -->
+        <ng-container matColumnDef="ml">
+          <th mat-header-cell *matHeaderCellDef class="col-center sortable-header" (click)="sortBy('ml')"
+              matTooltip="KI-Umkehrwahrscheinlichkeit (XGBoost) für die nächsten 5 Tage">
+            KI-Signal <mat-icon class="sort-icon">{{ sortIcon('ml') }}</mat-icon>
+          </th>
+          <td mat-cell *matCellDef="let row" class="col-center">
+            @if (!row.ml_available) {
+              <span class="ml-unavailable" matTooltip="ML-Service nicht verfügbar">–</span>
+            } @else if (row.reversal_pct != null) {
+              <span
+                [class]="'ml-badge ml-' + row.ml_signal"
+                [matTooltip]="mlTooltip(row)"
+              >
+                {{ row.reversal_pct.toFixed(0) }}%
+                @if (row.ml_signal !== 'none') {
+                  <span class="ml-signal-label">{{ mlSignalLabel(row.ml_signal) }}</span>
+                }
+              </span>
+            } @else {
+              <span class="ml-unavailable">–</span>
+            }
+          </td>
+        </ng-container>
+
         <tr mat-header-row *matHeaderRowDef="displayedColumns; sticky: true"></tr>
         <tr mat-row *matRowDef="let row; columns: displayedColumns"
             [class.row-all3]="row.criteria_met === 3"
@@ -165,7 +190,9 @@ type SortDir = 'asc' | 'desc' | null;
       <span class="badge-true">True</span> Kriterium erfüllt &nbsp;·&nbsp;
       <span class="badge-false">False</span> Nicht erfüllt &nbsp;·&nbsp;
       <span class="score score-3">3/3</span> Stärkstes Signal &nbsp;·&nbsp;
-      <span class="score score-2">2/3</span> Mittleres Signal
+      <span class="score score-2">2/3</span> Mittleres Signal &nbsp;·&nbsp;
+      <span class="ml-badge ml-strong">75% 🔥</span> KI: Starkes Umkehrsignal &nbsp;·&nbsp;
+      <span class="ml-badge ml-moderate">55% ↑</span> KI: Mittleres Signal
     </div>
   `,
   styles: [`
@@ -301,6 +328,26 @@ type SortDir = 'asc' | 'desc' | null;
       text-overflow: ellipsis;
     }
 
+    /* ML-Signal Badge */
+    .ml-badge {
+      display: inline-flex;
+      align-items: center;
+      gap: 4px;
+      padding: 3px 9px;
+      border-radius: 20px;
+      font-size: 12px;
+      font-weight: 600;
+      font-variant-numeric: tabular-nums;
+      cursor: default;
+      white-space: nowrap;
+    }
+    .ml-none     { background: #f3f4f6; color: #9ca3af; }
+    .ml-weak     { background: #fef9c3; color: #854d0e; border: 1px solid #fde68a; }
+    .ml-moderate { background: #ffedd5; color: #9a3412; border: 1px solid #fed7aa; }
+    .ml-strong   { background: #fee2e2; color: #991b1b; border: 1px solid #fecaca; }
+    .ml-signal-label { font-size: 11px; }
+    .ml-unavailable  { color: #d1d5db; font-size: 13px; }
+
     .legend {
       display: flex;
       align-items: center;
@@ -319,7 +366,7 @@ export class ResultsTableComponent {
 
   readonly displayedColumns = [
     'ticker', 'name', 'price', 'trend', 'direction',
-    'elliott', 'stochastic', 'macd', 'score', 'candle'
+    'elliott', 'stochastic', 'macd', 'score', 'candle', 'ml'
   ];
 
   // ── Sortier-State ────────────────────────────────────────
@@ -347,6 +394,7 @@ export class ResultsTableComponent {
         case 'score':      return f * (a.criteria_met - b.criteria_met);
         case 'direction':  return f * ((a.trend_direction ?? '').localeCompare(b.trend_direction ?? ''));
         case 'candle':     return f * ((a.candle_strength ?? 0) - (b.candle_strength ?? 0));
+        case 'ml':         return f * ((a.reversal_pct ?? -1) - (b.reversal_pct ?? -1));
         default:           return 0;
       }
     });
@@ -377,6 +425,26 @@ export class ResultsTableComponent {
 
   badgeClass(value: boolean): string {
     return value ? 'badge-true' : 'badge-false';
+  }
+
+  mlSignalLabel(signal: string): string {
+    const labels: Record<string, string> = {
+      strong:   '🔥',
+      moderate: '↑',
+      weak:     '~',
+    };
+    return labels[signal] ?? '';
+  }
+
+  mlTooltip(row: any): string {
+    const conf: Record<string, string> = { high: 'Hoch', medium: 'Mittel', low: 'Niedrig' };
+    const sig: Record<string, string>  = {
+      strong:   'Starkes Signal',
+      moderate: 'Mittleres Signal',
+      weak:     'Schwaches Signal',
+      none:     'Kein Signal',
+    };
+    return `KI-Umkehrsignal: ${sig[row.ml_signal] ?? '–'} | Konfidenz: ${conf[row.ml_confidence] ?? '–'} | Wahrscheinlichkeit: ${row.reversal_pct?.toFixed(1) ?? '–'}%`;
   }
 
   candleTooltip(strength: number): string {

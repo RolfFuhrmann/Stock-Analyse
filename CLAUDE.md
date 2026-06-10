@@ -8,7 +8,7 @@
 ## 1. Projektübersicht
 
 **Name:** Stock Platform
-**Zweck:** Analyse von Aktien anhand technischer Kriterien (Elliott Wave, Stochastik, MACD-Histogramm).
+**Zweck:** Analyse von Aktien anhand technischer Kriterien (Elliott Wave, Stochastik, MACD-Histogramm) kombiniert mit einem XGBoost-basierten ML-Modell zur Erkennung von Kursumkehrpunkten.
 Nutzer wählen Ticker, Datenquelle und Zeitraum – der Agent analysiert und streamt die Ergebnisse in Echtzeit an den Angular-Client.
 
 **Status:** In Entwicklung
@@ -18,47 +18,56 @@ Nutzer wählen Ticker, Datenquelle und Zeitraum – der Agent analysiert und str
 ## 2. Architektur
 
 ```
-┌──────────────────────────────────────────────────────────┐
-│                   Docker Network (stock-net)              │
-│                                                          │
-│  ┌──────────────────┐   SSE-Stream                       │
-│  │  Angular Client  │◄─────────────────────────────┐     │
-│  │  (Port 4200/80)  │                              │     │
-│  └──────────────────┘                              │     │
-│                                                    │     │
-│  ┌──────────────────┐   POST /analyze/stream        │     │
-│  │  Agent Service   │────────────────────────────→─┘     │
-│  │  (Port 8010)     │                                    │
-│  └──────┬──────┬────┘                                    │
-│         │      │                                         │
-│    yahoo│      │twelvedata                               │
-│         ▼      ▼                                         │
-│  ┌────────────────────┐   ┌──────────────────────┐       │
-│  │  VPN Gateway       │   │  TwelveData Service  │       │
-│  │  (Gluetun/Port8011)│   │  (Port 8012)         │       │
-│  │  alias:yahoo-svc   │   │  .env: API-Key       │       │
-│  └────────┬───────────┘   └──────────────────────┘       │
-│           │  network_mode: container:vpn                  │
-│           ▼                                              │
-│  ┌──────────────────┐                                    │
-│  │  Yahoo Service   │  (kein eigener Port/Netzwerk)      │
-│  │  Läuft im VPN-   │                                    │
-│  │  Container-Netz  │                                    │
-│  └──────────────────┘                                    │
-└──────────────────────────────────────────────────────────┘
+┌─────────────────────────────────────────────────────────────────────┐
+│                        Docker Network (stock-net)                    │
+│                                                                      │
+│  ┌──────────────────┐   SSE-Stream (result/done)                     │
+│  │  Angular Client  │◄──────────────────────────────────────┐        │
+│  │  (Port 4200/80)  │                                       │        │
+│  └──────────────────┘                                       │        │
+│                                                             │        │
+│  ┌──────────────────┐   POST /analyze/stream                │        │
+│  │  Agent Service   │───────────────────────────────────────┘        │
+│  │  (Port 8010)     │                                                │
+│  └──────┬───┬───┬───┘                                               │
+│         │   │   └──────────────────────────────┐                    │
+│   yahoo │   │ twelvedata                  ml   │                    │
+│         ▼   ▼                                  ▼                    │
+│  ┌──────────────┐  ┌──────────────────┐  ┌────────────────┐         │
+│  │ VPN Gateway  │  │TwelveData Service│  │   ML Service   │         │
+│  │ (Port 8011)  │  │  (Port 8012)     │  │  (Port 8015)   │         │
+│  └──────┬───────┘  └──────────────────┘  └───────┬────────┘         │
+│         │ network_mode: container:vpn             │                  │
+│         ▼                                        │                  │
+│  ┌──────────────┐      ┌───────────────────┐     │                  │
+│  │ Yahoo Service│      │  DB Access Service│◄────┘                  │
+│  │ (im VPN-Netz)│      │  (Port 8013)      │                        │
+│  └──────────────┘      └────────┬──────────┘                        │
+│                                 │                                    │
+│                        ┌────────▼──────────┐                        │
+│                        │  History Fetcher  │                        │
+│                        │  (Port 8014)      │                        │
+│                        └────────┬──────────┘                        │
+│                                 │                                    │
+│                        ┌────────▼──────────┐                        │
+│                        │  MySQL Datenbank  │                        │
+│                        │  (Port 3306)      │                        │
+│                        └───────────────────┘                        │
+└─────────────────────────────────────────────────────────────────────┘
 ```
 
 **VPN-Routing:**
-
 - `yahoo-service` hat `network_mode: "container:vpn"` – teilt Netzwerk-Namespace mit Gluetun
 - Alle Yahoo-Anfragen gehen durch den WireGuard-Tunnel (Proton VPN, Standard: Niederlande)
 - Der VPN-Container erhält den Alias `yahoo-service` im `stock-net` und leitet Port 8011 weiter
 - `agent-service` spricht Yahoo über `http://yahoo-service:8011` (= VPN-Gateway)
 
 **Kommunikation:**
-
 - Client → Agent: `POST /analyze/stream` (JSON Body)
 - Agent → Client: Server-Sent Events (SSE), Event-Typen: `result`, `done`
+- Agent → ML: `POST /predict/{ticker}` (5s Timeout, non-blocking)
+- History-Fetcher → DB-Service: REST `/api/ohlcv/...`
+- ML-Service → DB-Service: REST `/api/ohlcv/daily/{ticker}/latest`
 
 ---
 
@@ -83,49 +92,70 @@ src/app/
 │   ├── filter-header/      # Sticky Header: Datenquelle, Ticker, Lookback, Buttons
 │   ├── kpi-bar/            # KPI-Kacheln (Gesamt, 3/3, 2/3)
 │   ├── results-table/      # Scrollbare Ergebnistabelle, Header eingefroren
-│   └── empty-state/        # Platzhalter ohne Daten
+│   ├── criteria-filter/    # Score-Filter (0–3 Kriterien)
+│   ├── ticker-list-panel/  # Ticker-Listen aus DB anzeigen
+│   └── ticker-list-editor/ # Listen anlegen/bearbeiten
 ├── models/
-│   └── stock.models.ts     # StockResult, FilterState, AnalysisSummary, DataSource
+│   └── stock.models.ts     # StockResult (inkl. ML-Felder), FilterState, AnalysisSummary
 ├── services/
-│   ├── analysis.service.ts # SSE-Streaming
-│   └── pdf-export.service.ts # PDF via Browser-Print
-└── app.component.ts        # Root: State (Signals) + Koordination
+│   ├── analysis.service.ts   # SSE-Streaming
+│   ├── ticker-list.service.ts # REST-Calls zum DB-Service
+│   └── pdf-export.service.ts # PDF via Browser-Print (inkl. KI-Spalte)
+└── app.component.ts          # Root: State (Signals) + Koordination
 ```
 
-**Vordefinierte Ticker-Presets:**
+**StockResult (aktuelles Datenmodell):**
 
-- DAX 40: 32 Ticker (ADS, AIR, ALV, … ZAL)
-- Dow Jones: 30 Ticker (AAPL, AMGN, … AMZN – WBA entfernt)
-
-**Features:**
-
-- SSE-Streaming mit Echtzeit-Fortschrittsanzeige
-- Stop-Button bricht laufenden Datenabruf ab (bereits geladene Ergebnisse bleiben erhalten)
-- PDF-Export via Browser-Druckdialog (kein jsPDF)
-- PDF-Button aktiviert sich erst wenn alle Daten vorliegen (`loading === false && results.length > 0`)
+```typescript
+export interface StockResult {
+  ticker: string;
+  name: string | null;
+  current_price: number | null;
+  trend_pct: number | null;
+  trend_direction: 'bullish' | 'bearish' | null;
+  elliott_wave: boolean;
+  stochastic: boolean;
+  macd_histogram: boolean;
+  criteria_met: number;         // 0–3
+  source: string;
+  candle_pattern: string | null;
+  candle_strength: number;
+  // ML-Felder
+  reversal_prob:  number | null; // 0.0–1.0
+  reversal_pct:   number | null; // 0–100
+  ml_signal:      'none' | 'weak' | 'moderate' | 'strong';
+  ml_confidence:  'low' | 'medium' | 'high';
+  ml_available:   boolean;
+  error: string | null;
+}
+```
 
 ### 3.2 Agent Service (`agent-service/`)
 
-| Eigenschaft  | Wert                       |
-| ------------ | -------------------------- |
-| Sprache      | Python 3.12                |
-| Framework    | FastAPI + sse-starlette    |
-| Port         | 8010                       |
-| Datenquellen | Yahoo Finance, Twelve Data |
+| Eigenschaft  | Wert                           |
+| ------------ | ------------------------------ |
+| Sprache      | Python 3.12                    |
+| Framework    | FastAPI + sse-starlette        |
+| Port         | 8010                           |
+| Version      | 4.0.0                          |
 
 **Endpunkte:**
 
-| Method | Path              | Beschreibung               |
-| ------ | ----------------- | -------------------------- |
-| POST   | `/analyze/stream` | Startet SSE-Analyse-Stream |
+| Method | Path              | Beschreibung                        |
+| ------ | ----------------- | ----------------------------------- |
+| GET    | `/health`         | Liveness-Check inkl. Service-URLs   |
+| POST   | `/analyze/stream` | Startet SSE-Analyse-Stream          |
+| POST   | `/analyze/stop`   | Bricht laufenden Stream ab          |
 
 **Request Body (`POST /analyze/stream`):**
 
 ```json
 {
-  "tickers": ["AAPL", "MSFT"],
+  "tickers": ["ADS.DE", "AAPL"],
   "source": "yahoo",
-  "lookback_days": 90
+  "lookback_days": 90,
+  "session_id": "optional-uuid",
+  "include_ml": true
 }
 ```
 
@@ -133,38 +163,28 @@ src/app/
 
 ```
 event: result
-data: {"ticker":"AAPL","current_price":182.5,"trend_pct":3.2,"elliott_wave":true,"stochastic":false,"macd_histogram":true,"criteria_met":2,"source":"yahoo","error":null}
-
-event: result
-data: {...}
+data: {"ticker":"ADS.DE","name":"adidas AG","current_price":164.55,"trend_pct":16.82,
+       "trend_direction":"bullish","elliott_wave":true,"stochastic":false,
+       "macd_histogram":true,"criteria_met":2,"source":"yahoo",
+       "candle_pattern":null,"candle_strength":0,
+       "reversal_prob":0.2794,"reversal_pct":27.9,
+       "ml_signal":"none","ml_confidence":"low","ml_available":true,"error":null}
 
 event: done
-data: {}
+data: {"message": "Analyse abgeschlossen"}
 ```
-
-**Lokale Tests (ohne Docker):**
-
-```bash
-cd agent-service
-pytest tests/ -v --tb=short
-# Mit Coverage-Report:
-pytest tests/ --cov=candle_patterns --cov=trend_indicators --cov-report=term-missing
-```
-
-Die Testdateien enthalten `sys.path.insert(0, ...)` – kein `pip install -e .` nötig.
 
 ### 3.3 Yahoo Service (`yahoo-service/`)
 
-| Eigenschaft   | Wert                                             |
-| ------------- | ------------------------------------------------ |
-| Sprache       | Python 3.12                                      |
-| Framework     | FastAPI + sse-starlette                          |
-| Port (intern) | 8011 (erreichbar nur über VPN-Gateway-Alias)     |
-| Netzwerk      | `network_mode: "container:vpn"` – kein stock-net |
-| TLS-Tarnung   | `curl_cffi` mit `impersonate="chrome"`           |
+| Eigenschaft   | Wert                                              |
+| ------------- | ------------------------------------------------- |
+| Sprache       | Python 3.12                                       |
+| Framework     | FastAPI + sse-starlette                           |
+| Port (intern) | 8011 (erreichbar nur über VPN-Gateway-Alias)      |
+| Netzwerk      | `network_mode: "container:vpn"` – kein stock-net  |
+| TLS-Tarnung   | `curl_cffi` mit `impersonate="chrome"`            |
 
 **Anti-Blocking-Strategie:**
-
 - Läuft isoliert im Netzwerk-Namespace des `vpn`-Containers
 - Externe IP = anonyme Proton VPN IP (Niederlande)
 - `curl_cffi` imitiert Chrome-TLS-Fingerabdruck
@@ -178,9 +198,16 @@ Die Testdateien enthalten `sys.path.insert(0, ...)` – kein `pip install -e .` 
 | Sprache       | Python 3.12                         |
 | Framework     | FastAPI + sse-starlette             |
 | Port          | 8012                                |
+| Version       | 2.0.0                               |
 | Konfiguration | `twelvedata-service/.env` (API-Key) |
 
-**Rate-Limit:** Free Plan max 8 Requests/Minute → fixer Delay von 7.5s zwischen Tickern.
+**Wichtig – interval-Parameter:**
+- Ab v2.0.0 akzeptiert der Service einen optionalen `interval`-Parameter im Request
+- Default: `"1day"` (rückwärtskompatibel)
+- Für Stundendaten: `"1h"`
+- **Ohne `interval="1day"` liefert TwelveData Intraday-Daten → leeres `bars`-Array**
+
+**Rate-Limit:** Free Plan max 8 Requests/Minute → fixer Delay von 7.5s zwischen Tickern im Stream. Der History-Fetcher wartet zusätzlich 8s nach jedem einzelnen Request.
 
 ### 3.5 VPN Gateway (`vpn` / Gluetun)
 
@@ -190,82 +217,176 @@ Die Testdateien enthalten `sys.path.insert(0, ...)` – kein `pip install -e .` 
 - Alias `yahoo-service` im `stock-net` → Port 8011 wird weitergeleitet
 - IP-Wechsel: `docker exec vpn kill -HUP 1`
 
----
+### 3.6 DB Access Service (`stock-data-db-access/`)
 
-## 4. Datenmodelle (TypeScript)
+| Eigenschaft  | Wert                              |
+| ------------ | --------------------------------- |
+| Sprache      | Java 21                           |
+| Framework    | Spring Boot 3                     |
+| Port         | 8013                              |
+| Datenbank    | MySQL 9.7                         |
+| Migrations   | Flyway (V1–V4)                    |
 
-```typescript
-export type DataSource = 'yahoo' | 'twelvedata';
+**Datenbanktabellen:**
 
-export interface StockResult {
-  ticker: string;
-  current_price: number | null;
-  trend_pct: number | null;
-  elliott_wave: boolean;
-  stochastic: boolean;
-  macd_histogram: boolean;
-  criteria_met: number; // 0, 1, 2 oder 3
-  source: string;
-  error: string | null;
-}
+| Tabelle         | Zweck                                          |
+| --------------- | ---------------------------------------------- |
+| `ticker_lists`  | Listen (DAX40, DOW30, INDIZES, INTERNATIONALE RTF'S) |
+| `ticker_symbols`| Einzelne Ticker pro Liste (raw_symbol)         |
+| `ticker_meta`   | Normalisierte API-Symbole + Stammdaten         |
+| `ohlcv_daily`   | Tageskerzen (5 Jahre, ~1.250 pro Ticker)       |
+| `ohlcv_hourly`  | Stundenkerzen (12 Monate, ~5.000 pro Ticker)   |
+| `fetch_log`     | Protokoll aller Datenabrufe                    |
 
-export interface FilterState {
-  source: DataSource;
-  tickers: string[];
-  lookbackDays: number;
-}
+**Wichtige Endpunkte (OHLCV):**
 
-export interface AnalysisSummary {
-  total: number;
-  count3of3: number;
-  count2of3: number;
-  source: DataSource;
-}
+| Method | Path                              | Beschreibung                     |
+| ------ | --------------------------------- | -------------------------------- |
+| GET    | `/api/ohlcv/meta`                 | Alle Ticker-Metadaten            |
+| GET    | `/api/ohlcv/daily/{ticker}/latest?n=90` | Neueste N Tageskerzen      |
+| POST   | `/api/ohlcv/daily/bulk`           | Bulk-Insert Tageskerzen          |
+| POST   | `/api/ohlcv/hourly/bulk`          | Bulk-Insert Stundenkerzen        |
+| POST   | `/api/ohlcv/fetch-log`            | Abruf-Protokoll schreiben        |
+| GET    | `/api/ohlcv/coverage`             | Datenbestand-Übersicht           |
+
+### 3.7 History Fetcher (`history-fetcher/`)
+
+| Eigenschaft  | Wert                              |
+| ------------ | --------------------------------- |
+| Sprache      | Python 3.12                       |
+| Framework    | FastAPI + APScheduler             |
+| Port         | 8014                              |
+| Version      | 1.0.0 (fix: TwelveData interval)  |
+
+**Verhalten:**
+- Beim ersten Start: prüft ob Daten vorhanden → startet Erstbefüllung automatisch (AUTO_INITIAL_RUN=true)
+- Erstbefüllung: 5 Jahre Tagesdaten + Stundendaten für alle 4 Listen
+- Täglicher Update-Lauf: 20:00 Uhr (nur neue Kerzen seit letztem Abruf)
+- Idempotent: bereits vorhandene Kerzen werden übersprungen
+
+**Endpunkte:**
+
+| Method | Path              | Beschreibung                         |
+| ------ | ----------------- | ------------------------------------ |
+| GET    | `/health`         | Status + Scheduler-Info              |
+| GET    | `/status`         | Letzter Lauf + nächster geplanter    |
+| POST   | `/fetch/initial`  | Erstbefüllung manuell starten        |
+| POST   | `/fetch/update`   | Update-Lauf manuell starten          |
+| GET    | `/coverage`       | Proxy → DB-Service Coverage          |
+
+**Kritische Konfiguration:**
+```
+LIST_CODES = ["DAX40", "DOW30", "INDIZES", "INTERNATIONALE RTF'S"]
+twelvedata_delay_sec = 8.0   # nach JEDEM TwelveData-Request (Rate-Limit)
+ticker_delay_sec     = 0.5   # zwischen Yahoo-Tickern
 ```
 
+**TwelveData-Fix (v2):** `interval="1day"` wird explizit übergeben. Ohne diesen Parameter liefert TwelveData Intraday-Daten → leeres bars-Array → 0 Kerzen in der DB.
+
+### 3.8 ML Service (`ml-service/`)
+
+| Eigenschaft  | Wert                              |
+| ------------ | --------------------------------- |
+| Sprache      | Python 3.12                       |
+| Framework    | FastAPI + APScheduler             |
+| Port         | 8015                              |
+| Modell       | XGBoost (xgb_reversal.joblib)     |
+| Features     | 38 technische Indikatoren         |
+
+**Was das Modell tut:**
+- Lernt aus 5 Jahren OHLCV-History aller Ticker
+- Label: Steigt der Kurs in den nächsten 5 Tagen um mehr als 3%? (ja=1 / nein=0)
+- Zeitreihen-Split 80/20 (kein zufälliges Shufflen → kein Data-Leakage)
+- Klassen-Gewichtung: Umkehrpunkte sind selten → pos_weight automatisch berechnet
+
+**Top-Features (aus Trainings-Ergebnis):**
+1. `vol_20d` – Volatilität 20 Tage (11.8%) – dominiert deutlich
+2. `vol_10d` – Volatilität 10 Tage (6.7%)
+3. `dist_52w_high` – Abstand 52-Wochen-Hoch (3.7%)
+4. `dist_sma50` – Abstand SMA 50 (3.0%)
+5. `lower_wick` – Unterer Kerzendocht (2.7%)
+
+**Backtesting-Ergebnis (initiales Training):**
+- Precision: 0.384 | Recall: 0.367 | ROC-AUC: 0.698
+- ROC-AUC 0.698 = solides Signal (0.5 = Zufall, 1.0 = perfekt)
+
+**Konfiguration (Stellschrauben):**
+```
+forecast_horizon       = 5     # Tage in die Zukunft
+reversal_threshold_pct = 3.0   # Mindest-Kursänderung % für "Umkehr"
+```
+Nach Änderung: `curl -X POST http://localhost:8015/model/train`
+
+**Signal-Schwellen:**
+- 0–39%: kein Signal
+- 40–54%: schwach
+- 55–74%: mittel
+- 75–100%: stark 🔥
+
+**Endpunkte:**
+
+| Method | Path                   | Beschreibung                         |
+| ------ | ---------------------- | ------------------------------------ |
+| GET    | `/health`              | Status + model_ready                 |
+| GET    | `/model/status`        | Metriken + Feature-Importance        |
+| POST   | `/model/train`         | Training manuell starten             |
+| POST   | `/predict/{ticker}`    | Vorhersage für einen Ticker          |
+| POST   | `/predict/batch`       | Vorhersage für mehrere Ticker        |
+
+**Modell-Persistenz:** Docker-Volume `ml_models:/app/models` – überlebt Container-Neustarts.
+**Retraining:** Automatisch jeden Sonntag 02:00 Uhr.
+
 ---
 
-## 5. Docker & Lokale Ausführung
+## 4. Docker & Ports
 
-### Vollständiger Start (mit VPN)
+| Service            | Container               | Port  |
+| ------------------ | ----------------------- | ----- |
+| VPN Gateway        | `vpn`                   | 8011  |
+| Agent Service      | `stock_agent`           | 8010  |
+| Yahoo Service      | `stock_yahoo`           | –     |
+| TwelveData Service | `stock_twelvedata`      | 8012  |
+| DB Access Service  | `stock_db_access`       | 8013  |
+| History Fetcher    | `stock_history_fetcher` | 8014  |
+| ML Service         | `stock_ml_service`      | 8015  |
+| MySQL              | `stock_data_db`         | 3306  |
+| Angular Client     | `stock_client`          | 4200  |
 
-Voraussetzung: Root `.env` mit WireGuard-Zugangsdaten und `twelvedata-service/.env` mit API-Key.
-
+**Vollständiger Start:**
 ```bash
 docker compose up -d --build
 ```
 
-### Einzelner Client-Start
-
+**Einzelnen Service neu bauen:**
 ```bash
-cd angular-client
-docker build -t stock-client .
-docker run -p 4200:80 --name stock-client stock-client
+docker compose up -d --build <service-name>
+# z.B.:
+docker compose up -d --build agent-service
+docker compose up -d --build ml-service
 ```
 
-### Nur Client aus docker-compose (ohne Backend)
-
+**ML-Training nach Datenbankbefüllung:**
 ```bash
-docker compose up --build --no-deps angular-client
+curl -X POST http://localhost:8015/model/train
+curl http://localhost:8015/model/status
 ```
 
-### Lokale Agent-Tests (ohne Docker)
-
+**History-Fetcher manuell starten:**
 ```bash
-cd agent-service
-pytest tests/ -v --tb=short
-# Mit Coverage-Report (Ziel: ≥ 80%):
-pytest tests/ --cov=candle_patterns --cov=trend_indicators --cov-report=term-missing
+curl -X POST http://localhost:8014/fetch/initial
+docker logs -f stock_history_fetcher
 ```
 
-### Hinweis Plattform
-
-Alle Dockerfiles enthalten `--platform=linux/arm64` (Apple Silicon / Mac M-Series).
-Für x86-Server/Linux-VM die `--platform`-Angabe entfernen.
+**Swagger Docs:**
+- Agent:      http://localhost:8010/docs
+- TwelveData: http://localhost:8012/docs
+- DB-Service: http://localhost:8013/swagger-ui.html
+- History:    http://localhost:8014/docs
+- ML-Service: http://localhost:8015/docs
 
 ---
 
-## 6. Coding-Konventionen
+## 5. Coding-Konventionen
 
 - **Sprache im Code:** Englisch (Variablen, Methoden, Interfaces)
 - **Kommentare:** Deutsch (erklären das _Warum_, nicht das _Was_)
@@ -277,37 +398,27 @@ Für x86-Server/Linux-VM die `--platform`-Angabe entfernen.
 
 ---
 
-## 7. Offene Punkte / Roadmap
+## 6. Roadmap
 
 > Diese Sektion bitte nach jeder Session aktualisieren.
 
-- [ ] ~~`TODO: Umbennen indicators.py in bullish_reversal_indicator.py und bullish_candle_pattern_reversal.py `~~
+- [x] Elliott Wave + MACD + Stochastik Indikatoren
+- [x] Bullische und bearische Umkehrerkennung
+- [x] Candlestick Pattern Erkennung (5 bullische + bearische Muster)
+- [x] `trend_direction` zeigt aktuellen Markttrend (nicht Umkehrerwartung)
+- [x] Angular-Client: Ticker-Listen aus DB laden und bearbeiten
+- [x] DB Access Service (Spring Boot / MySQL) mit Flyway-Migrationen
+- [x] History Fetcher: 5 Jahre Tagesdaten + Stundendaten für alle Listen
+- [x] ML Service: XGBoost Umkehrwahrscheinlichkeit (ROC-AUC 0.698)
+- [x] Agent Service v4: ML-Signal in SSE-Stream integriert
+- [x] Angular Client: KI-Signal-Spalte (farbkodiert, sortierbar, PDF-Export)
 
-- [] ~~`TODO: Erstellen einer bearishen Umkehr Erkennung bearish_reversal_indicator.py, mit einer Aufährtsteigende Elliot Wave mindestens 1-2-3, das MACD-Histogram über 0 und die Slow Stochastik über 80.`~~
-
-- [] ~~`TODO: Erstellen einer bearisch_candle_pattern_reversal.py für Bearish Abandoned Baby, Dark Cloud Cover, Bearish Engulfing und Shooting Star.`~~
-
-- [x] ~~`TODO: Im angular-client wird die Spalte Trend mit bullish oder bearish gefüllt. Je nach Erkennung im *indikator.py. Die Spalte Umkehrformation wird umbenannt in Candlestick Pattern.`~~ ✅ `trend_direction` zeigt den **aktuellen Markttrend** (nicht die Umkehrerwartung). `bull`-Indikator angeschlagen (Abwärtswelle/MACD<0/Stoch<20) → `"bearish"`. `bear`-Indikator angeschlagen (Aufwärtswelle/MACD>0/Stoch>80) → `"bullish"`. Korrektur in `main.py` (`analyse_quote`).
-
-- [x] ~~`TODO: Den angular-client so ändern, das auf der Startseite eine Kachel mit den vorhanden Abruflisten angezeigt wird (via stock-data-db-access). Hinter jeder Liste ist ein Button zur Bearbeitung der Listen. Die Bearbeitung oder eine Neuanlage erfolgt in einer weiteren Kachel rechts daneben. Wird eine Abrufliste angecklickt, werden die Tickersymbole aus der Liste in dem bereits bestehnde Eingabefeld übernommen. Die Buttons für DAX und DOW Jones werden nicht mehr benötigt und werden entfernt. Unter den Abruflisten gibt es einen weiteren Button zum anlegen einer neuen Abrufliste. Das Bearbeitungsfenster wird je nach ART (Bearbeiten oder Neuanlage entsprechend in itialisiert.)`~~
-
-- [x] ~~`TODO: Erstelle einen DB-Access Service für MySQL97 die eigenständig im Docker läuft. Der Service soll alle Verwaltungsfunktionen zum anlegen, ändern und löschen für Listen (DAX, DOW Jones etc.) mit Tickersymbole abdecken. Dazu gehört auch das Datenmodell mit den entsprechenden Enititäten. Es soll auch berücksichtigt werden, das die Datenbeschaffung die Tickersybole anders aufbereitet werden müssen. Ich denke die speicherung des Börsenplatzes (XETRA, USA) sollte dem genüge tun.`~~
-
-- [x] ~~`TODO: trend_indicators.py lockern. MACD unter der 0-Linie. Slow-Stochastik unter der 20-Linie.`~~ ✅ `macd_ok` prüft nur noch `is_negative`. `stoch_ok` prüft nur noch `k < 20`. `histogram_shrinking` und `k_rising` werden weiterhin berechnet, sind aber kein Pflichtkriterium.
-- [x] ~~`TODO: Für candle_patterns.py jedes Pattern in eigenen Bereich kapseln. Gemeinsam genutzter Code in Utility auslagern.`~~ ✅ Jedes Muster in eigener Funktion (`_detect_abandoned_baby`, `_detect_morning_star`, `_detect_engulfing`, `_detect_piercing`, `_detect_hammer`). Hilfsfunktionen in `_CandleUtils` ausgelagert.
-- [x] ~~`TODO: Prüfung für Bullish Abandoned Baby und Morning Star 4 Kerzen. Kerze 0 bis 1 definiert den Abwärtskontext. Kerze 2 definiert den Doji/Stern. Kerze 3 die Aufwärtsbewegung.`~~ ✅ Beide Muster nutzen `df.iloc[-4:]`. i0/i1 = Abwärtskontext (beide bearish, i1 schließt unter i0). i2 = Doji+Gap / Stern. i3 = bullische Umkehrkerze.
-- [x] ~~`TODO: Prüfung für Piercing Line, Bullish Engulfing und Hammer 3 Kerzen. Kerze 0 bis 1 definiert den Abwärtskontext. Kerze 2 ist zur Erkennung des Musters.`~~ ✅ Alle drei Muster nutzen `df.iloc[-3:]`. i0/i1 = Abwärtskontext. i2 = Mustererkennung.
-- [x] ~~`TODO: Im agent-service den indicators.py aufsplitten, so das der Bereich für die Trenderkennung (EW, Stochastik und MACD) gekapselt wird und der Bereich für die Kerzenformationen ebenfalls gekapselt wird.`~~ ✅ Aufgeteilt in `trend_indicators.py` (Elliott, MACD, Stochastik, evaluate_stock) und `candle_patterns.py`. `indicators.py` bleibt als Kompatibilitäts-Shim – kein Breaking Change in main.py.
-- [x] ~~`TODO: Das Testsetup mit in den Service integriert wird, so das die Tests manuell ausgeführt werden können. Die Testabdeckung soll mindestens 80% betragen.`~~ ✅ `tests/test_candle_patterns.py` + `tests/test_trend_indicators.py`, 50 Tests, Coverage 95%. Ausführen: `cd agent-service && pytest tests/ -v --cov=candle_patterns --cov=trend_indicators --cov-report=term-missing`
-- [x] ~~Yahoo-Abruf über VPN absichern.~~ ✅ `yahoo-service` läuft mit `network_mode: "container:vpn"` hinter Gluetun (WireGuard, Proton VPN). VPN-Konfiguration in Root `.env`.
-- [x] ~~Projekt für GitHub vorbereiten.~~ ✅ Root `.gitignore` + `.env.example` erstellt. `twelvedata-service/.env.example` ergänzt. Echter API-Key aus `.env` entfernt (Platzhalter). README Schnellstart korrigiert.
-
-**Zuletzt geändert:** 2026-06-07
-**Zuletzt bearbeitet von Claude:** `main.py` – `trend_direction`-Logik korrigiert. `bull`-Indikator (Abwärtswelle + MACD<0 + Stoch<20) → Label `"bearish"` (aktueller Trend). `bear`-Indikator (Aufwärtswelle + MACD>0 + Stoch>80) → Label `"bullish"` (aktueller Trend). Hintergrund: Die Indikatoren sind als Umkehrsignal-Detektoren gebaut – `trend_direction` zeigt jetzt den aktuellen Markttrend, nicht die erwartete Umkehrrichtung. Workflow-Dokumentation ergänzt (Abschnitt 9).
+**Zuletzt geändert:** 2026-06-10
+**Zuletzt bearbeitet von Claude:** ML-Pipeline vollständig integriert. History-Fetcher (TwelveData interval-Fix + alle 4 Listen). ML-Service (XGBoost, 38 Features, wöchentliches Retraining). Agent Service v4.0.0 (ML-Signal via `_fetch_ml_signal()`). Angular Client (KI-Signal Spalte + PDF-Export). Dokumentation komplett aktualisiert.
 
 ---
 
-## 8. Wichtige Hinweise für Claude
+## 7. Wichtige Hinweise für Claude
 
 - **Bestehende API-Verträge nicht brechen** – das SSE-Format (`event: result / done`) ist fix
 - **Angular Material + Tailwind** – beide im Einsatz; `preflight: false` in Tailwind um Konflikte zu vermeiden
@@ -317,11 +428,13 @@ Für x86-Server/Linux-VM die `--platform`-Angabe entfernen.
 - **VPN-Routing** – `yahoo-service` hat `network_mode: "container:vpn"`, keinen eigenen `stock-net`-Anschluss. Erreichbar über Alias `yahoo-service` am VPN-Gateway (Port 8011). Nie direkten Port für `yahoo-service` in `docker-compose.yml` eintragen.
 - **Secrets** – `.env`-Dateien niemals committen. Immer die `.env.example`-Vorlage aktuell halten wenn neue Variablen hinzukommen.
 - **Plattform** – `--platform=linux/arm64` in allen Dockerfiles (Apple Silicon). Bei x86-Änderungen immer erwähnen.
+- **TwelveData interval** – immer `interval="1day"` für Tagesdaten und `interval="1h"` für Stundendaten übergeben. Ohne diesen Parameter liefert TwelveData Intraday-Daten.
+- **ML-Signal ist non-blocking** – Timeout 5s. Bei ML-Service-Ausfall läuft die Analyse normal weiter (`ml_available: false`).
 - Bei Unklarheiten zuerst fragen, dann implementieren
 
 ---
 
-## 9. Analyse-Workflow & Systemdesign-Entscheidungen
+## 8. Analyse-Workflow & Systemdesign-Entscheidungen
 
 ### Zweistufiger Analyse-Workflow
 
@@ -329,7 +442,8 @@ Für x86-Server/Linux-VM die `--platform`-Angabe entfernen.
 Stufe 1 – Automatisches Screening (agent-service)
   ├── Elliott Wave + MACD + Stochastik → trend_direction (bullish / bearish)
   ├── Score 0–3 → Priorisierung (3/3 = stärkstes Signal)
-  └── Candlestick Pattern → erster Hinweis auf mögliche Umkehr
+  ├── Candlestick Pattern → erster Hinweis auf mögliche Umkehr
+  └── KI-Signal (XGBoost) → Umkehrwahrscheinlichkeit 0–100%
 
 Stufe 2 – Manuelle Qualitätsprüfung (nur bei Score 2/3 oder 3/3)
   ├── Fibonacci-Retracements einzeichnen
@@ -337,13 +451,21 @@ Stufe 2 – Manuelle Qualitätsprüfung (nur bei Score 2/3 oder 3/3)
   └── Endgültige Handelsentscheidung
 ```
 
-### Semantik der Indikatoren (wichtig!)
+### Semantik der Indikatoren (kritisch!)
 
 Die Indikator-Dateien sind als **Umkehrsignal-Detektoren** konzipiert:
 
-| Datei                           | Erkennt diese Marktbedingung      | `trend_direction` in main.py |
-| ------------------------------- | --------------------------------- | ---------------------------- |
+| Datei                           | Erkennt diese Marktbedingung       | `trend_direction` in main.py |
+| ------------------------------- | ---------------------------------- | ---------------------------- |
 | `bullish_reversal_indicator.py` | Abwärtswelle + MACD<0 + Stoch<20  | `"bearish"`                  |
 | `bearish_reversal_indicator.py` | Aufwärtswelle + MACD>0 + Stoch>80 | `"bullish"`                  |
 
-**Regel:** `trend_direction` zeigt den **aktuellen Markttrend**, nicht die erwartete Umkehrrichtung. Der Name der Indikator-Datei beschreibt die _erwartete_ Umkehr, nicht den aktuellen Zustand. Diese Invertierung ist in `main.py` (`analyse_quote`) explizit kommentiert und darf nicht ohne Weiteres geändert werden.
+**Regel:** `trend_direction` zeigt den **aktuellen Markttrend**, nicht die erwartete Umkehrrichtung. Diese Invertierung ist in `main.py` (`analyse_quote`) explizit kommentiert und darf **nicht** geändert werden.
+
+### ML-Signal Interpretation
+
+| Kombination                          | Bedeutung                                            |
+| ------------------------------------ | ---------------------------------------------------- |
+| `bearish` + ML-Signal stark (>75%)   | Abwärtstrend + KI sieht Umkehrchance → Fibonacci!   |
+| `bullish` + ML-Signal keins (<40%)   | Laufender Aufwärtstrend, keine Wende erwartet        |
+| `bullish` + ML-Signal mittel/stark   | Widerspruch → besonders genau prüfen                 |
