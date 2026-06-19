@@ -11,7 +11,7 @@ import { MatInputModule } from '@angular/material/input';
 import { MatProgressBarModule } from '@angular/material/progress-bar';
 import { MatTooltipModule } from '@angular/material/tooltip';
 
-import { DataSource, FilterState } from '../../models/stock.models';
+import { DataSource, FilterState, Interval, INTERVAL_LABELS, INTERVAL_LOOKBACK } from '../../models/stock.models';
 
 @Component({
   selector: 'app-filter-header',
@@ -46,6 +46,20 @@ import { DataSource, FilterState } from '../../models/stock.models';
                                    [disabled]="loading()">
             <mat-button-toggle value="yahoo">Yahoo Finance</mat-button-toggle>
             <mat-button-toggle value="twelvedata">Twelve Data</mat-button-toggle>
+          </mat-button-toggle-group>
+        </div>
+
+        <div class="divider"></div>
+
+        <!-- Analyse-Zeitrahmen -->
+        <div class="control-group">
+          <label class="control-label">Zeitrahmen</label>
+          <mat-button-toggle-group [value]="interval()"
+                                   (change)="onIntervalChange($event.value)"
+                                   [disabled]="loading()">
+            <mat-button-toggle value="1d">1D</mat-button-toggle>
+            <mat-button-toggle value="4h">4H</mat-button-toggle>
+            <mat-button-toggle value="1h">1H</mat-button-toggle>
           </mat-button-toggle-group>
         </div>
 
@@ -189,8 +203,11 @@ export class FilterHeaderComponent implements OnChanges {
   readonly home      = output<void>();
 
   readonly source       = signal<DataSource>('yahoo');
+  readonly interval     = signal<Interval>('1d');
   readonly tickerInput  = signal('AAPL, MSFT, JPM');
   readonly lookbackDays = signal(90);
+
+  readonly intervalLabels = INTERVAL_LABELS;
 
   readonly tickerList = computed(() =>
     this.tickerInput().split(',').map((t) => t.trim()).filter((t) => t.length > 0)
@@ -208,14 +225,19 @@ export class FilterHeaderComponent implements OnChanges {
     }
   }
 
-  onSourceChange(value: DataSource): void { this.source.set(value); }
-  onTickerInput(val: string): void        { this.tickerInput.set(val); }
+  onSourceChange(value: DataSource): void   { this.source.set(value); }
+  onIntervalChange(value: Interval): void   {
+    this.interval.set(value);
+    this.lookbackDays.set(INTERVAL_LOOKBACK[value]);
+  }
+  onTickerInput(val: string): void          { this.tickerInput.set(val); }
   onHome(): void                          { this.home.emit(); }
 
   onAnalyze(): void {
     if (this.tickerCount() === 0 || this.loading()) return;
     this.analyze.emit({
-      source: this.source(), tickers: this.tickerList(), lookbackDays: this.lookbackDays(),
+      source: this.source(), interval: this.interval(),
+      tickers: this.tickerList(), lookbackDays: this.lookbackDays(),
     });
   }
 

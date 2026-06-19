@@ -13,8 +13,11 @@ class Settings(BaseSettings):
     model_dir: str = "/app/models"
 
     # ── Feature-Engineering ───────────────────────────────────
-    # Anzahl Tageskerzen die als Input-Fenster verwendet werden
+    # Anzahl Kerzen die als Input-Fenster verwendet werden (gilt für alle Intervals)
     lookback_days: int = 60
+    # Mindestanzahl Kerzen für 4h/1h-Training (weniger = kein Training für diesen Ticker)
+    min_4h_candles:  int = 200
+    min_1h_candles:  int = 200
     # Wie viele Tage in die Zukunft wird die Umkehr vorhergesagt?
     forecast_horizon: int = 5
     # Mindest-Preisänderung (%) um als Umkehr zu gelten

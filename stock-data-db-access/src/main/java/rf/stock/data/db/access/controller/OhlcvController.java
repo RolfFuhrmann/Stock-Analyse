@@ -36,6 +36,12 @@ import java.util.List;
  *   GET    /api/ohlcv/hourly/{ticker}/latest?n= – neueste N Kerzen
  *   POST   /api/ohlcv/hourly/bulk              – Bulk-Insert (history-fetcher)
  *
+ * ── 4-Stunden-Kerzen ─────────────────────────────────────────────────────────
+ *   GET    /api/ohlcv/4h/{ticker}               – alle 4h-Kerzen
+ *   GET    /api/ohlcv/4h/{ticker}?from=&to=     – Zeitbereich
+ *   GET    /api/ohlcv/4h/{ticker}/latest?n=     – neueste N Kerzen
+ *   POST   /api/ohlcv/4h/bulk                  – Bulk-Insert (history-fetcher)
+ *
  * ── Fetch-Log ────────────────────────────────────────────────────────────────
  *   GET    /api/ohlcv/fetch-log/{ticker}       – Abruf-Protokoll pro Ticker
  *   GET    /api/ohlcv/fetch-log/errors?hours=  – Fehler der letzten N Stunden
@@ -142,6 +148,37 @@ public class OhlcvController {
         @Valid @RequestBody OhlcvHourlyBulkRequest req
     ) {
         return ResponseEntity.status(HttpStatus.CREATED).body(service.bulkInsertHourly(req));
+    }
+
+
+    // ── 4-Stunden-Kerzen ──────────────────────────────────────────────────────
+
+    @GetMapping("/4h/{ticker}")
+    public ResponseEntity<List<OhlcvFourHourlyResponse>> getFourHourlyBars(
+        @PathVariable String ticker,
+        @RequestParam(required = false) @DateTimeFormat(iso = DateTimeFormat.ISO.DATE_TIME) LocalDateTime from,
+        @RequestParam(required = false) @DateTimeFormat(iso = DateTimeFormat.ISO.DATE_TIME) LocalDateTime to
+    ) {
+        String t = ticker.toUpperCase();
+        if (from != null && to != null) {
+            return ResponseEntity.ok(service.getFourHourlyBars(t, from, to));
+        }
+        return ResponseEntity.ok(service.getFourHourlyBars(t));
+    }
+
+    @GetMapping("/4h/{ticker}/latest")
+    public ResponseEntity<List<OhlcvFourHourlyResponse>> getLatestFourHourlyBars(
+        @PathVariable String ticker,
+        @RequestParam(defaultValue = "500") int n   // 500 = ~3 Monate in 4h-Kerzen
+    ) {
+        return ResponseEntity.ok(service.getLatestFourHourlyBars(ticker.toUpperCase(), n));
+    }
+
+    @PostMapping("/4h/bulk")
+    public ResponseEntity<OhlcvFourHourlyBulkResponse> bulkInsertFourHourly(
+        @Valid @RequestBody OhlcvFourHourlyBulkRequest req
+    ) {
+        return ResponseEntity.status(HttpStatus.CREATED).body(service.bulkInsertFourHourly(req));
     }
 
     // ── Fetch-Log ─────────────────────────────────────────────────────────────

@@ -31,11 +31,12 @@ def reload():
     logger.info("Modell neu geladen")
 
 
-def predict(df: pd.DataFrame) -> dict:
+def predict(df: pd.DataFrame, interval: str = "1d") -> dict:
     """
     Berechnet die Umkehrwahrscheinlichkeit für die letzte Kerze im DataFrame.
 
-    df: OHLCV-DataFrame (chronologisch aufsteigend, mind. 220 Zeilen)
+    df:       OHLCV-DataFrame (chronologisch aufsteigend, mind. 220 Zeilen)
+    interval: "1d" | "4h" | "1h" – wird als Feature #39 eingebettet
 
     Gibt zurück:
     {
@@ -70,7 +71,7 @@ def predict(df: pd.DataFrame) -> dict:
         }
 
     try:
-        features = compute_features(df)
+        features = compute_features(df, interval=interval)
         if features.empty:
             raise ValueError("Keine Features berechnet")
 

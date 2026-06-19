@@ -1,6 +1,6 @@
 import { Injectable } from '@angular/core';
 import { Observable } from 'rxjs';
-import { DataSource, StockResult } from '../models/stock.models';
+import { DataSource, Interval, StockResult } from '../models/stock.models';
 
 /**
  * AnalysisService
@@ -27,6 +27,7 @@ export class AnalysisService {
   streamAnalysis(
     tickers: string[],
     source: DataSource,
+    interval: Interval = '1d',
     lookbackDays = 90
   ): Observable<StockResult> {
     return new Observable<StockResult>((observer) => {
@@ -42,6 +43,7 @@ export class AnalysisService {
         body: JSON.stringify({
           tickers,
           source,
+          interval,
           lookback_days: lookbackDays,
           session_id: sessionId,
         }),

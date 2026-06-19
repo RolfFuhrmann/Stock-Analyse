@@ -132,11 +132,48 @@ public final class OhlcvDtos {
         String message
     ) {}
 
+    // ── OhlcvFourHourly ───────────────────────────────────────────────────────
+
+    public record OhlcvFourHourlyBulkRequest(
+        @NotBlank @Size(max = 30) String ticker,
+        @NotBlank @Pattern(regexp = "yahoo|twelvedata") String source,
+        @NotNull @Size(min = 1, max = 5000) List<@Valid OhlcvFourHourlyBarRequest> bars
+    ) {}
+
+    public record OhlcvFourHourlyBarRequest(
+        @NotNull LocalDateTime tradeTime,
+        @NotNull @DecimalMin("0.0") BigDecimal open,
+        @NotNull @DecimalMin("0.0") BigDecimal high,
+        @NotNull @DecimalMin("0.0") BigDecimal low,
+        @NotNull @DecimalMin("0.0") BigDecimal close,
+        Long volume
+    ) {}
+
+    public record OhlcvFourHourlyResponse(
+        Long          id,
+        String        ticker,
+        LocalDateTime tradeTime,
+        BigDecimal    open,
+        BigDecimal    high,
+        BigDecimal    low,
+        BigDecimal    close,
+        Long          volume,
+        String        source,
+        LocalDateTime fetchedAt
+    ) {}
+
+    public record OhlcvFourHourlyBulkResponse(
+        String ticker,
+        int    inserted,
+        int    skipped,
+        String message
+    ) {}
+
     // ── FetchLog ──────────────────────────────────────────────────────────────
 
     public record FetchLogRequest(
         @NotBlank @Size(max = 30)  String ticker,
-        @NotBlank @Pattern(regexp = "daily|hourly") String intervalType,
+        @NotBlank @Pattern(regexp = "daily|hourly|4h") String intervalType,
         @NotBlank @Size(max = 20)  String source,
         @NotBlank @Pattern(regexp = "SUCCESS|ERROR|PARTIAL") String status,
         int barsFetched,
@@ -161,6 +198,7 @@ public final class OhlcvDtos {
         int           totalTickers,
         long          totalDailyBars,
         long          totalHourlyBars,
+        long          totalFourHourlyBars,
         LocalDate     oldestDailyBar,
         LocalDate     newestDailyBar,
         LocalDateTime oldestHourlyBar,
@@ -173,6 +211,7 @@ public final class OhlcvDtos {
         String        companyName,
         long          dailyBars,
         long          hourlyBars,
+        long          fourHourlyBars,
         LocalDate     oldestDaily,
         LocalDate     newestDaily,
         String        lastFetchStatus

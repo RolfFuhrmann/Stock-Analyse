@@ -8,6 +8,7 @@ import rf.stock.data.db.access.busines.OhlcvDtos.*;
 import rf.stock.data.db.access.exception.DuplicateResourceException;
 import rf.stock.data.db.access.exception.ResourceNotFoundException;
 import rf.stock.data.db.access.model.*;
+import rf.stock.data.db.access.repository.OhlcvFourHourlyRepository;
 import rf.stock.data.db.access.repository.*;
 
 import java.time.LocalDate;
@@ -23,8 +24,9 @@ public class OhlcvService {
 
     private final TickerMetaRepository   metaRepo;
     private final OhlcvDailyRepository   dailyRepo;
-    private final OhlcvHourlyRepository  hourlyRepo;
-    private final FetchLogRepository     fetchLogRepo;
+    private final OhlcvHourlyRepository      hourlyRepo;
+    private final OhlcvFourHourlyRepository  fourHourlyRepo;
+    private final FetchLogRepository          fetchLogRepo;
 
     // ── TickerMeta ────────────────────────────────────────────────────────────
 
@@ -184,6 +186,57 @@ public class OhlcvService {
         );
     }
 
+
+    // ── OhlcvFourHourly ───────────────────────────────────────────────────────
+
+    public List<OhlcvFourHourlyResponse> getFourHourlyBars(String ticker) {
+        return fourHourlyRepo.findByTickerOrderByTradeTimeAsc(ticker)
+            .stream().map(this::toFourHourlyResponse).toList();
+    }
+
+    public List<OhlcvFourHourlyResponse> getFourHourlyBars(String ticker, LocalDateTime from, LocalDateTime to) {
+        return fourHourlyRepo.findByTickerAndTradeTimeBetweenOrderByTradeTimeAsc(ticker, from, to)
+            .stream().map(this::toFourHourlyResponse).toList();
+    }
+
+    public List<OhlcvFourHourlyResponse> getLatestFourHourlyBars(String ticker, int limit) {
+        List<OhlcvFourHourly> bars = fourHourlyRepo.findLatestByTicker(ticker, limit);
+        List<OhlcvFourHourly> sorted = new ArrayList<>(bars);
+        sorted.sort((a, b) -> a.getTradeTime().compareTo(b.getTradeTime()));
+        return sorted.stream().map(this::toFourHourlyResponse).toList();
+    }
+
+    @Transactional
+    public OhlcvFourHourlyBulkResponse bulkInsertFourHourly(OhlcvFourHourlyBulkRequest req) {
+        int inserted = 0;
+        int skipped  = 0;
+
+        for (OhlcvFourHourlyBarRequest bar : req.bars()) {
+            if (fourHourlyRepo.existsByTickerAndTradeTime(req.ticker(), bar.tradeTime())) {
+                skipped++;
+                continue;
+            }
+            OhlcvFourHourly entity = OhlcvFourHourly.builder()
+                .ticker(req.ticker())
+                .tradeTime(bar.tradeTime())
+                .open(bar.open())
+                .high(bar.high())
+                .low(bar.low())
+                .close(bar.close())
+                .volume(bar.volume())
+                .source(req.source())
+                .build();
+            fourHourlyRepo.save(entity);
+            inserted++;
+        }
+
+        log.info("ohlcv_4h [{}]: {} eingefügt, {} übersprungen", req.ticker(), inserted, skipped);
+        return new OhlcvFourHourlyBulkResponse(
+            req.ticker(), inserted, skipped,
+            inserted + " neue Kerzen gespeichert, " + skipped + " bereits vorhanden"
+        );
+    }
+
     // ── FetchLog ──────────────────────────────────────────────────────────────
 
     @Transactional
@@ -216,12 +269,14 @@ public class OhlcvService {
     public CoverageSummaryResponse getCoverage() {
         List<TickerMeta> allMeta = metaRepo.findAll();
 
-        long totalDaily  = dailyRepo.count();
-        long totalHourly = hourlyRepo.count();
+        long totalDaily      = dailyRepo.count();
+        long totalHourly     = hourlyRepo.count();
+        long totalFourHourly = fourHourlyRepo.count();
 
         List<TickerCoverageResponse> tickerCoverage = allMeta.stream().map(meta -> {
-            long daily  = dailyRepo.countByTicker(meta.getTicker());
-            long hourly = hourlyRepo.countByTicker(meta.getTicker());
+            long daily       = dailyRepo.countByTicker(meta.getTicker());
+            long hourly      = hourlyRepo.countByTicker(meta.getTicker());
+            long fourHourly  = fourHourlyRepo.countByTicker(meta.getTicker());
             LocalDate oldest = dailyRepo
                 .findByTickerAndTradeDateBetweenOrderByTradeDateAsc(
                     meta.getTicker(), LocalDate.of(2000, 1, 1), LocalDate.now())
@@ -235,7 +290,7 @@ public class OhlcvService {
 
             return new TickerCoverageResponse(
                 meta.getTicker(), meta.getCompanyName(),
-                daily, hourly, oldest, newest, lastStatus
+                daily, hourly, fourHourly, oldest, newest, lastStatus
             );
         }).toList();
 
@@ -248,7 +303,7 @@ public class OhlcvService {
             .filter(d -> d != null).max(LocalDate::compareTo).orElse(null);
 
         return new CoverageSummaryResponse(
-            allMeta.size(), totalDaily, totalHourly,
+            allMeta.size(), totalDaily, totalHourly, totalFourHourly,
             oldestD, newestD, null, null,
             tickerCoverage
         );
@@ -299,6 +354,14 @@ public class OhlcvService {
             f.getId(), f.getTicker(), f.getIntervalType(),
             f.getSource(), f.getStatus(), f.getBarsFetched(),
             f.getErrorMsg(), f.getRunAt()
+        );
+    }
+
+    private OhlcvFourHourlyResponse toFourHourlyResponse(OhlcvFourHourly o) {
+        return new OhlcvFourHourlyResponse(
+            o.getId(), o.getTicker(), o.getTradeTime(),
+            o.getOpen(), o.getHigh(), o.getLow(), o.getClose(),
+            o.getVolume(), o.getSource(), o.getFetchedAt()
         );
     }
 }

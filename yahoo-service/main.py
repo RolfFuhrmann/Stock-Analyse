@@ -48,6 +48,7 @@ session = curl_requests.Session(impersonate="chrome")
 class QuoteRequest(BaseModel):
     tickers: list[str]
     outputsize: int = 180
+    interval: str = "1d"   # "1d" | "1h" – wird an yfinance weitergegeben
 
 
 class OHLCVBar(BaseModel):
@@ -66,8 +67,25 @@ class TickerQuote(BaseModel):
 
 
 # ── 4. Kern-Logik (Yahoo Abruf) ──────────────────────────────
-def fetch_ohlcv(ticker: str, outputsize: int) -> TickerQuote:
-    """Lädt OHLCV-Tagesdaten von Yahoo Finance mit Retry bei Rate-Limit."""
+def fetch_ohlcv(ticker: str, outputsize: int, interval: str = "1d") -> TickerQuote:
+    """
+    Lädt OHLCV-Daten von Yahoo Finance mit Retry bei Rate-Limit.
+
+    interval="1d": outputsize = gewünschte Anzahl Tageskerzen,
+                    period=f"{outputsize}d".
+    interval="1h": outputsize = gewünschte Anzahl Stundenkerzen.
+                    yfinance erlaubt für 1h-Daten max. period="730d".
+                    Umrechnung: ~7 Handelsstunden/Tag + Puffer für
+                    Wochenenden/Feiertage, gekappt auf 729 Tage.
+    """
+    if interval == "1h":
+        days_needed = min(int(outputsize / 7) + 10, 729)
+        period      = f"{days_needed}d"
+        min_rows    = 2
+    else:
+        period   = f"{outputsize}d"
+        min_rows = 30
+
     for attempt, wait in enumerate([0] + RETRY_DELAYS, start=1):
         if wait > 0:
             logger.info(f"  {ticker}: Rate-Limit – warte {wait}s (Versuch {attempt}/4)")
@@ -75,12 +93,12 @@ def fetch_ohlcv(ticker: str, outputsize: int) -> TickerQuote:
         try:
             ticker_obj = yf.Ticker(ticker, session=session)
             df = ticker_obj.history(
-                period=f"{outputsize}d",
-                interval="1d",
+                period=period,
+                interval=interval,
                 auto_adjust=True
             )
-            
-            if df.empty or len(df) < 30:
+
+            if df.empty or len(df) < min_rows:
                 return TickerQuote(ticker=ticker, bars=[], error="Keine ausreichenden Daten")
 
             if isinstance(df.columns, pd.MultiIndex):
@@ -91,19 +109,37 @@ def fetch_ohlcv(ticker: str, outputsize: int) -> TickerQuote:
             df = df[["open", "high", "low", "close", "volume"]].dropna()
             df.index = pd.to_datetime(df.index)
 
-            bars = [
-                OHLCVBar(
-                    date=str(idx.date()),
-                    open=round(float(row["open"]), 4),
-                    high=round(float(row["high"]), 4),
-                    low=round(float(row["low"]), 4),
-                    close=round(float(row["close"]), 4),
-                    volume=round(float(row["volume"]), 0) if pd.notna(row["volume"]) else None,
-                )
-                for idx, row in df.iterrows()
-            ]
+            # Für 1d reicht das reine Datum (bisheriges Format,
+            # damit bestehende Daily-Verarbeitung unverändert bleibt).
+            # Für 1h wird der volle Zeitstempel benötigt – isoformat()
+            # liefert die Yahoo-Handelszeit inkl. Stunde (lokale
+            # Börsenzeitzone, z.B. Europe/Berlin für Xetra).
+            if interval == "1h":
+                bars = [
+                    OHLCVBar(
+                        date=idx.isoformat(),
+                        open=round(float(row["open"]), 4),
+                        high=round(float(row["high"]), 4),
+                        low=round(float(row["low"]), 4),
+                        close=round(float(row["close"]), 4),
+                        volume=round(float(row["volume"]), 0) if pd.notna(row["volume"]) else None,
+                    )
+                    for idx, row in df.iterrows()
+                ]
+            else:
+                bars = [
+                    OHLCVBar(
+                        date=str(idx.date()),
+                        open=round(float(row["open"]), 4),
+                        high=round(float(row["high"]), 4),
+                        low=round(float(row["low"]), 4),
+                        close=round(float(row["close"]), 4),
+                        volume=round(float(row["volume"]), 0) if pd.notna(row["volume"]) else None,
+                    )
+                    for idx, row in df.iterrows()
+                ]
 
-            logger.info(f"{ticker}: {len(bars)} Bars geladen")
+            logger.info(f"{ticker}: {len(bars)} Bars geladen (interval={interval}, period={period})")
             return TickerQuote(ticker=ticker, bars=bars)
 
         except Exception as e:
@@ -118,11 +154,11 @@ def fetch_ohlcv(ticker: str, outputsize: int) -> TickerQuote:
 
 
 # ── 5. SSE Generator ──────────────────────────────────────────
-async def quote_stream(tickers: list[str], outputsize: int) -> AsyncGenerator:
+async def quote_stream(tickers: list[str], outputsize: int, interval: str = "1d") -> AsyncGenerator:
     """Sendet pro Ticker sofort ein SSE-Event nach dem Abruf."""
     for i, ticker in enumerate(tickers):
         loop = asyncio.get_event_loop()
-        quote = await loop.run_in_executor(None, fetch_ohlcv, ticker, outputsize)
+        quote = await loop.run_in_executor(None, fetch_ohlcv, ticker, outputsize, interval)
 
         yield {
             "event": "quote",
@@ -150,5 +186,8 @@ async def stream_quotes(request: QuoteRequest):
     if not request.tickers:
         return {"error": "Ticker-Liste ist leer"}
 
-    logger.info(f"SSE-Stream gestartet für {len(request.tickers)} Ticker.")
-    return EventSourceResponse(quote_stream(request.tickers, request.outputsize))
+    logger.info(
+        f"SSE-Stream gestartet für {len(request.tickers)} Ticker "
+        f"(interval={request.interval}, outputsize={request.outputsize})."
+    )
+    return EventSourceResponse(quote_stream(request.tickers, request.outputsize, request.interval))

@@ -30,7 +30,7 @@ from sklearn.preprocessing import StandardScaler
 from xgboost import XGBClassifier
 
 from app.config import settings
-from app.features.engineer import FEATURE_NAMES, compute_features, compute_labels
+from app.features.engineer import FEATURE_NAMES, INTERVAL_CODE_MAP, compute_features, compute_labels
 
 logger = logging.getLogger(__name__)
 
@@ -39,53 +39,93 @@ SCALER_PATH   = Path(settings.model_dir) / "scaler.joblib"
 META_PATH     = Path(settings.model_dir) / "model_meta.json"
 
 
-def train(ohlcv_by_ticker: dict[str, pd.DataFrame]) -> dict:
+def _collect_features_for_interval(
+    ohlcv_by_ticker: dict[str, pd.DataFrame],
+    interval: str,
+    min_rows: int = 100,
+) -> tuple[list, list]:
     """
-    Haupttraining.
-
-    ohlcv_by_ticker: { "ADS.DE": DataFrame(open,high,low,close,volume), ... }
-
-    Gibt ein Dict mit Trainings-Metriken zurück.
+    Berechnet Features und Labels für alle Ticker eines Intervals.
+    Gibt (all_features, all_labels) zurück.
     """
-    logger.info("═" * 60)
-    logger.info("TRAINING gestartet")
-    logger.info(f"  Ticker:             {len(ohlcv_by_ticker)}")
-    logger.info(f"  Forecast-Horizont:  {settings.forecast_horizon} Tage")
-    logger.info(f"  Umkehr-Schwelle:    {settings.reversal_threshold_pct}%")
-    logger.info("═" * 60)
-
-    # ── 1. Features und Labels für alle Ticker berechnen ──────
     all_features = []
     all_labels   = []
 
     for ticker, df in ohlcv_by_ticker.items():
-        if len(df) < 250:
-            logger.warning(f"[{ticker}] Zu wenig Daten ({len(df)} Zeilen) – übersprungen")
+        if len(df) < min_rows:
+            logger.warning(
+                f"[{ticker}/{interval}] Zu wenig Daten ({len(df)} Zeilen) – übersprungen"
+            )
             continue
         try:
-            feat   = compute_features(df)
-            labels = compute_labels(df, settings.forecast_horizon,
-                                    settings.reversal_threshold_pct)
+            # interval wird als Feature #39 (interval_code) eingebettet
+            feat   = compute_features(df, interval=interval)
+            labels = compute_labels(
+                df, settings.forecast_horizon, settings.reversal_threshold_pct
+            )
 
-            # Nur Zeilen mit gültigem Label und Features
             labels = labels.dropna()
             common = feat.index.intersection(labels.index)
             feat   = feat.loc[common]
             labels = labels.loc[common]
 
             if len(feat) < settings.min_samples_per_class * 2:
-                logger.warning(f"[{ticker}] Zu wenig Samples nach Feature-Berechnung – übersprungen")
+                logger.warning(
+                    f"[{ticker}/{interval}] Zu wenig Samples – übersprungen"
+                )
                 continue
 
             all_features.append(feat)
             all_labels.append(labels)
-            logger.info(f"[{ticker}] {len(feat)} Samples, "
-                        f"{int(labels.sum())} Umkehrsignale ({labels.mean()*100:.1f}%)")
+            logger.info(
+                f"[{ticker}/{interval}] {len(feat)} Samples, "
+                f"{int(labels.sum())} Umkehrsignale ({labels.mean()*100:.1f}%)"
+            )
         except Exception as e:
-            logger.error(f"[{ticker}] Feature-Fehler: {e}")
+            logger.error(f"[{ticker}/{interval}] Feature-Fehler: {e}")
+
+    return all_features, all_labels
+
+
+def train(ohlcv_by_interval: dict[str, dict[str, pd.DataFrame]]) -> dict:
+    """
+    Multi-Interval-Training.
+
+    ohlcv_by_interval: {
+        "1d": { "ADS.DE": DataFrame, ... },
+        "4h": { "ADS.DE": DataFrame, ... },
+        "1h": { "ADS.DE": DataFrame, ... },
+    }
+
+    Alle drei Zeitrahmen werden zu einem gemeinsamen Trainings-Dataset
+    zusammengeführt. interval_code (0/1/2) als Feature #39 erlaubt dem
+    Modell, je Zeitrahmen unterschiedliche Schwellen zu lernen.
+
+    Gibt ein Dict mit Trainings-Metriken zurück.
+    """
+    total_tickers = sum(len(v) for v in ohlcv_by_interval.values())
+    logger.info("═" * 60)
+    logger.info("TRAINING gestartet (Multi-Interval: 1d / 4h / 1h)")
+    logger.info(f"  Ticker gesamt:      {total_tickers}")
+    logger.info(f"  Forecast-Horizont:  {settings.forecast_horizon} Kerzen")
+    logger.info(f"  Umkehr-Schwelle:    {settings.reversal_threshold_pct}%")
+    logger.info("═" * 60)
+
+    # ── 1. Features und Labels für alle Intervals berechnen ───
+    all_features = []
+    all_labels   = []
+
+    for interval, tickers_df in ohlcv_by_interval.items():
+        if not tickers_df:
+            logger.warning(f"Keine Daten für Interval {interval} – übersprungen")
+            continue
+        logger.info(f"── Interval {interval}: {len(tickers_df)} Ticker ──")
+        feats, labels = _collect_features_for_interval(tickers_df, interval)
+        all_features.extend(feats)
+        all_labels.extend(labels)
 
     if not all_features:
-        raise ValueError("Kein einziger Ticker lieferte ausreichend Daten für das Training")
+        raise ValueError("Kein einziger Ticker/Interval lieferte ausreichend Daten für das Training")
 
     X = pd.concat(all_features, ignore_index=True)
     y = pd.concat(all_labels,   ignore_index=True).astype(int)
@@ -173,7 +213,11 @@ def train(ohlcv_by_ticker: dict[str, pd.DataFrame]) -> dict:
 
     meta = {
         "trained_at":         datetime.now().isoformat(),
-        "tickers":            list(ohlcv_by_ticker.keys()),
+        "tickers":            [
+            f"{t}/{iv}"
+            for iv, tmap in ohlcv_by_interval.items()
+            for t in tmap
+        ],
         "total_samples":      len(X),
         "train_samples":      len(X_train),
         "test_samples":       len(X_test),
@@ -186,6 +230,7 @@ def train(ohlcv_by_ticker: dict[str, pd.DataFrame]) -> dict:
             "roc_auc":   round(auc, 4),
         },
         "feature_importance": {k: round(v, 4) for k, v in top10},
+        "intervals_trained":  list(ohlcv_by_interval.keys()),
         "n_estimators_used":  model.best_iteration + 1,
     }
     with open(META_PATH, "w") as f:

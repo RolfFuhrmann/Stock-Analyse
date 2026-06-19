@@ -50,15 +50,24 @@ FEATURE_NAMES = [
     "roc_10d", "roc_20d",
     # Trendkontinuität
     "days_above_sma20", "days_above_sma50",
+    # Interval-Kodierung (ordinale Skala: 0=1d, 1=4h, 2=1h)
+    "interval_code",
 ]
 
 
-def compute_features(df: pd.DataFrame) -> pd.DataFrame:
+# Mapping Interval-String → ordinaler Code für das Modell
+INTERVAL_CODE_MAP: dict[str, int] = {"1d": 0, "4h": 1, "1h": 2}
+
+
+def compute_features(df: pd.DataFrame, interval: str = "1d") -> pd.DataFrame:
     """
     Berechnet alle Features aus einem OHLCV-DataFrame.
 
     Erwartet Spalten: open, high, low, close, volume
     Index: DatetimeIndex oder RangeIndex (chronologisch aufsteigend)
+
+    interval: "1d" | "4h" | "1h" – wird als ordinales Feature kodiert,
+              damit das Modell Signalstärken je Zeitrahmen unterscheiden kann.
 
     Gibt einen DataFrame mit FEATURE_NAMES als Spalten zurück.
     Zeilen mit NaN (Anfang der Serie) werden entfernt.
@@ -173,6 +182,11 @@ def compute_features(df: pd.DataFrame) -> pd.DataFrame:
 
     feat["days_above_sma20"] = above_sma20.rolling(20).mean()
     feat["days_above_sma50"] = above_sma50.rolling(20).mean()
+
+    # ── Interval-Kodierung ────────────────────────────────────
+    # Ordinales Feature damit das Modell je Zeitrahmen unterschiedliche
+    # Schwellen und Signalstärken lernen kann (0=daily, 1=4h, 2=1h)
+    feat["interval_code"] = float(INTERVAL_CODE_MAP.get(interval, 0))
 
     # ── Sicherstellung der Spaltenreihenfolge ─────────────────
     feat = feat[FEATURE_NAMES]
