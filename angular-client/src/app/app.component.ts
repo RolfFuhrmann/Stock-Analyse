@@ -223,7 +223,7 @@ export class AppComponent implements OnDestroy {
     this.criteriaFilter.set(EMPTY_FILTER);
 
     this._subscription = this.analysisService
-      .streamAnalysis(filter.tickers, filter.source, filter.lookbackDays)
+      .streamAnalysis(filter.tickers, filter.source, filter.interval, filter.lookbackDays)
       .subscribe({
         next:     (result) => this.results.update((prev) => [...prev, result]),
         error:    (err)    => {

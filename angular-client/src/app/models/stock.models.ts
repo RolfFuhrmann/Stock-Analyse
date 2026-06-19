@@ -1,9 +1,23 @@
 export type DataSource   = 'yahoo' | 'twelvedata';
 export type TickerFormat = 'RAW' | 'XETRA' | 'CUSTOM';
+export type Interval     = '1d' | '4h' | '1h';
+
+export const INTERVAL_LABELS: Record<Interval, string> = {
+  '1d': 'Daily',
+  '4h': '4 Stunden',
+  '1h': '1 Stunde',
+};
+
+export const INTERVAL_LOOKBACK: Record<Interval, number> = {
+  '1d': 90,
+  '4h': 180,
+  '1h': 200,
+};
 
 export interface StockResult {
   ticker: string;
   name: string | null;
+  interval: '1d' | '4h' | '1h';
   current_price: number | null;
   trend_pct: number | null;
   /** Erkannte Richtung der Umkehr: "bullish", "bearish" oder null */
@@ -27,6 +41,7 @@ export interface StockResult {
 
 export interface FilterState {
   source: DataSource;
+  interval: Interval;
   tickers: string[];
   lookbackDays: number;
 }

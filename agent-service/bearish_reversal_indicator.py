@@ -10,7 +10,7 @@ evaluate_bearish_stock() fasst alle Indikatoren zur Gesamtauswertung zusammen.
 import numpy as np
 import pandas as pd
 
-from bearish_candle_pattern_reversal import detect_bearish_candle_pattern
+from bearish_candle_pattern_reversal import detect_bearish_pattern as detect_bearish_candle_pattern
 
 
 # ─────────────────────────────────────────────
@@ -238,7 +238,9 @@ def evaluate_bearish_stock(df: pd.DataFrame, lookback: int = 90) -> dict:
     elliott = detect_elliott_123_up(closes, lookback)
     macd    = calc_macd_bearish(closes)
     stoch   = calc_slow_stochastic_bearish(df, k_period=14, d_period=3)
+    print("DEBUG: Vor dem Aufruf von detect_bearish_candle_pattern")
     candle  = detect_bearish_candle_pattern(df)
+    print("DEBUG: Nach dem Aufruf von detect_bearish_candle_pattern")
 
     macd_ok    = bool(macd["is_positive"]) if macd else False   # Signal: MACD > 0
     stoch_ok   = bool(stoch["is_overbought"]) if stoch else False  # Signal: %K > 80

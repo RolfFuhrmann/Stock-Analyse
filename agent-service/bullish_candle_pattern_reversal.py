@@ -1,253 +1,219 @@
 """
-bullish_candle_pattern_reversal.py – Bullische Umkehrformationen
-Gekapselte Erkennung unabhängig von den Trendindikatoren.
+bullish_candle_pattern_reversal.py – Bullish Reversal Pattern Recognition
 
-Unterstützte Muster (Priorität / Stärke):
-  1. Bullish Abandoned Baby  (5) – 4-Kerzen: i0–i3 Kontext, i2 Doji+Gap, i3 bullish+Gap
-  2. Morning Star            (4) – 4-Kerzen: i0–i3 Kontext, i2 Stern, i3 bullish
-  3. Bullish Engulfing       (3) – 3-Kerzen: i0–i2 Kontext, i2 umschließt i1
-  4. Piercing Line           (2) – 3-Kerzen: i0–i2 Kontext, i2 durchdringt i1
-  5. Hammer                  (1) – 3-Kerzen: i0–i2 Kontext, i2 Hammer-Form
-
-Wichtig: Die letzte (noch laufende) Kerze wird grundsätzlich ausgeschlossen.
-         Nur abgeschlossene Kerzen werden analysiert.
+Diese Datei enthält Erkennungsalgorithmen für bullische Kerzen-Formationen (Reversals)
+am Ende eines Abwärtstrends. Um Seitwärtsphasen (Rauschen) verlässlich to filtern,
+wird eine historische Periode von 5 aufeinanderfolgenden Trendkerzen vorausgesetzt.
 """
 
 import pandas as pd
 
+# ══════════════════════════════════════════════════════════════════════════════
+# TREND AND PATTERN RULES (IMPLEMENTED VIA GLOBAL CONSTANTS):
+#
+# 1. Trend Definition:
+#    - For ALL patterns, exactly 5 completed candles are used to establish 
+#      the initial trend context before the pattern starts.
+#    - The trend is validated by checking if the trend direction moves downward
+#      overall, preventing false signals inside flat sideways channels.
+#    - A threshold (TREND_TOLERANCE_PCT) is applied to handle minor market noise.
+#
+# 2. Pattern Windows and Alignments:
+#    - Hammer: Requires 6 candles in total.
+#      First 5 candles = Downtrend context | Last 1 candle = Hammer pattern.
+#    - Bullish Engulfing & Piercing Line: Requires 7 candles in total.
+#      First 5 candles = Downtrend context | Last 2 candles = Reversal pattern.
+#    - Bullish Abandoned Baby & Morning Star: Requires 8 candles in total.
+#      First 5 candles = Downtrend context | Last 3 candles = Reversal pattern.
+# ══════════════════════════════════════════════════════════════════════════════
 
 # ══════════════════════════════════════════════════════════════════════════════
-# Utilities
-# ══════════════════════════════════════════════════════════════════════════════
+# Globale Konfiguration / Toleranzen
+TREND_TOLERANCE_PCT = 0.005  # Erlaubter "Fehler" (Puffer) bei der Trendprüfung (0.5%)
+GAP_TOLERANCE_PCT = 0.02     # Toleranz für Gap-Überschneidungen (2%)
+ENGULFING_THRESHOLD = 0.95   # Prozentsatz, den der Körper umschlossen sein muss (95%)
+PIERCING_MIDPOINT_TOLERANCE = 0.02 # Puffer für das Erreichen der 50%-Linie (2%)
+
 
 class _CandleUtils:
-    """Gemeinsame Hilfsfunktionen für Kerzenberechnungen."""
+    """Hilfsfunktionen für Kerzenberechnungen basierend auf relativen Indizes von hinten."""
 
-    def __init__(self, o, h, l, c):
-        self.o = o
-        self.h = h
-        self.l = l
-        self.c = c
+    def __init__(self, df: pd.DataFrame):
+        self.o = df["open"].values
+        self.h = df["high"].values
+        self.l = df["low"].values
+        self.c = df["close"].values
+        self.length = len(df)
 
-    def body(self, i: int) -> float:
-        return abs(self.c[i] - self.o[i])
+    def body(self, idx: int) -> float:
+        """Berechnet die absolute Größe des Kerzenkörpers."""
+        return abs(self.c[idx] - self.o[idx])
 
-    def is_bearish(self, i: int) -> bool:
-        return self.c[i] < self.o[i]
+    def is_bearish(self, idx: int) -> bool:
+        return self.c[idx] < self.o[idx]
 
-    def is_bullish(self, i: int) -> bool:
-        return self.c[i] > self.o[i]
+    def is_bullish(self, idx: int) -> bool:
+        return self.c[idx] > self.o[idx]
 
-    def lower_shadow(self, i: int) -> float:
-        return min(self.o[i], self.c[i]) - self.l[i]
+    def lower_shadow(self, idx: int) -> float:
+        return min(self.o[idx], self.c[idx]) - self.l[idx]
 
-    def upper_shadow(self, i: int) -> float:
-        return self.h[i] - max(self.o[i], self.c[i])
+    def upper_shadow(self, idx: int) -> float:
+        return self.h[idx] - max(self.o[idx], self.c[idx])
 
-    def is_doji(self, i: int, tolerance: float = 0.1) -> bool:
-        """Doji: Körper sehr klein im Verhältnis zur Gesamtspanne."""
-        span = self.h[i] - self.l[i]
-        return span > 0 and self.body(i) / span < tolerance
+    def is_doji(self, idx: int, tolerance: float = 0.1) -> bool:
+        span = self.h[idx] - self.l[idx]
+        if span == 0: return True
+        return self.body(idx) / span < tolerance
 
-    def midpoint(self, i: int) -> float:
-        """Mittelpunkt des Kerzenkörpers."""
-        return (self.o[i] + self.c[i]) / 2
+    def midpoint(self, idx: int) -> float:
+        return (self.o[idx] + self.c[idx]) / 2
 
+    def has_downtrend_before(self, pattern_start_idx: int) -> bool:
+        """
+        Prüft, ob die 5 Kerzen DIREKT VOR dem Muster einen echten Abwärtstrend zeigen.
+        """
+        if pattern_start_idx < 0:
+            pattern_start_idx = self.length + pattern_start_idx
+            
+        start = pattern_start_idx - 5
+        if start < 0:
+            return False
+            
+        for i in range(start, pattern_start_idx - 1):
+            current_top = max(self.o[i], self.c[i])
+            next_top = max(self.o[i+1], self.c[i+1])
+            
+            current_bottom = min(self.o[i], self.c[i])
+            next_bottom = min(self.o[i+1], self.c[i+1])
+            
+            allowed_error = current_top * TREND_TOLERANCE_PCT
+            
+            if next_top > current_top + allowed_error or next_bottom > current_bottom + allowed_error:
+                return False
+                
+        return True
 
-# ══════════════════════════════════════════════════════════════════════════════
-# Muster-Erkennungen (je eine Funktion pro Muster)
-# ══════════════════════════════════════════════════════════════════════════════
 
 def _detect_abandoned_baby(u: _CandleUtils) -> bool:
-    """
-    Bullish Abandoned Baby – 4 Kerzen (i0–i3).
-
-    Abwärtskontext: i0 bearish, i1 bearish und schließt unter i0.
-    Muster:
-      i1: bearish (letzte Abwärtskerze vor dem Wendepunkt)
-      i2: Doji mit Gap nach unten (i2-Hoch unter i1-Tief)
-      i3: bullish mit Gap nach oben (i3-Tief über i2-Hoch)
-    """
-    o, h, l, c = u.o, u.h, u.l, u.c
-    # Abwärtskontext
-    if not (u.is_bearish(0) and u.is_bearish(1) and c[1] < c[0]):
+    """Erkennung: Bullish Abandoned Baby (Stärke 5) - Benötigt 5 Trendkerzen + 3 Musterkerzen = 8"""
+    if u.length < 8 or not u.has_downtrend_before(-3):
         return False
-    # Muster
+        
+    avg_span = (u.h[-3] - u.l[-3] + u.h[-2] - u.l[-2] + u.h[-1] - u.l[-1]) / 3
+    allowed_overlap = avg_span * GAP_TOLERANCE_PCT
+        
     return (
-        u.is_bearish(1)
-        and u.is_doji(2, tolerance=0.35)
-        and h[2] < l[1]       # Gap nach unten: i2-Hoch unter i1-Tief
-        and u.is_bullish(3)
-        and l[3] > h[2]       # Gap nach oben: i3-Tief über i2-Hoch
+        u.is_bearish(-3)
+        and u.is_doji(-2, tolerance=0.35)
+        and (u.h[-2] - allowed_overlap) < u.l[-3]
+        and u.is_bullish(-1)
+        and (u.l[-1] + allowed_overlap) > u.h[-2]
     )
 
 
 def _detect_morning_star(u: _CandleUtils) -> bool:
-    """
-    Morning Star – 4 Kerzen (i0–i3).
-
-    Abwärtskontext: i0 bearish, i1 bearish und schließt unter i0.
-    Muster:
-      i1: große bearishe Kerze
-      i2: kleiner Körper (Stern) unterhalb des i1-Körpers
-      i3: bullish, Körper muss mindestens 60% des i1-Körpers betragen
-          UND über 50% des i1-Körpers schließen – erst dann ist die
-          Bestätigung stark genug für eine echte Umkehr.
-    """
-    o, h, l, c = u.o, u.h, u.l, u.c
-    # Abwärtskontext
-    if not (u.is_bearish(0) and u.is_bearish(1) and c[1] < c[0]):
+    """Erkennung: Morning Star (Stärke 4) - Benötigt 5 Trendkerzen + 3 Musterkerzen = 8"""
+    if u.length < 8 or not u.has_downtrend_before(-3):
         return False
-
-    avg_body    = (u.body(1) + u.body(2) + u.body(3)) / 3
-    midpoint_i1 = u.midpoint(1)
-
+    
+    # Kriterien für Morning Star:
+    # 1. Bär (-3), 2. Star (-2), 3. Bulle (-1)
+    # Exklusive Bedingung: Der Close von -1 muss deutlich über dem Midpoint von -3 liegen.
     return (
-        u.is_bearish(1) and u.body(1) > avg_body * 0.8
-        and u.body(2) < u.body(1) * 0.4
-        and max(o[2], c[2]) < min(o[1], c[1])  # Stern liegt unter i1-Körper
-        and u.is_bullish(3)
-        # i3 muss kräftig genug sein: Körper ≥ 50% von i1
-        and u.body(3) >= u.body(1) * 0.5
-        # i3 schließt deutlich über Mitte i1 (70% statt 50%)
-        and c[3] > o[1] - u.body(1) * 0.3
+        u.is_bearish(-3)
+        and u.is_bullish(-1)
+        and u.c[-1] > u.midpoint(-3)
     )
-
 
 def _detect_engulfing(u: _CandleUtils) -> bool:
-    """
-    Bullish Engulfing – 3 Kerzen (i0–i2).
-
-    Abwärtskontext: i0 bearish, i1 bearish und schließt unter i0.
-    Muster:
-      i1: bearish
-      i2: bullish, umschließt i1 vollständig, schließt über i0-Schluss
-    """
-    o, h, l, c = u.o, u.h, u.l, u.c
-    # Abwärtskontext
-    if not (u.is_bearish(0) and u.is_bearish(1) and c[1] < c[0]):
+    """Erkennung: Bullish Engulfing (Stärke 3)"""
+    if u.length < 7 or not u.has_downtrend_before(-2):
         return False
-    # Muster
-    return (
-        u.is_bearish(1)
-        and u.is_bullish(2)
-        and o[2] <= c[1]          # öffnet unter/gleich Schluss i1
-        and c[2] >= o[1]          # schließt über/gleich Öffnung i1
-        and u.body(2) > u.body(1)
-        and c[2] > c[0]           # über i0-Schluss – echte Umkehr
-    )
-
+        
+    # --- NEUER, STRIKTER EXKLUSIVITÄTS-CHECK ---
+    # Prüfe, ob die Konstellation die Anforderungen eines Morning Stars erfüllt.
+    # Wenn ja, unterdrücken wir das Engulfing-Signal, damit der Morning Star gewinnt.
+    if u.length >= 8 and u.has_downtrend_before(-3):
+        is_morning_star_setup = (
+            u.is_bearish(-3) 
+            and u.body(-2) < u.body(-3) # Star ist kleiner als Bär
+            and u.is_bullish(-1) 
+            and u.c[-1] > u.midpoint(-3)
+        )
+        if is_morning_star_setup:
+            return False
+    # ------------------------------------------
+        
+    if not (u.is_bearish(-2) and u.is_bullish(-1)):
+        return False
+        
+    k2_top = u.o[-2]
+    k2_bottom = u.c[-2]
+    
+    engulfs_top = u.c[-1] >= (k2_top - u.body(-2) * (1 - ENGULFING_THRESHOLD))
+    engulfs_bottom = u.o[-1] <= (k2_bottom + u.body(-2) * (1 - ENGULFING_THRESHOLD))
+    
+    return engulfs_top and engulfs_bottom and (u.body(-1) > u.body(-2) * ENGULFING_THRESHOLD)
 
 def _detect_piercing(u: _CandleUtils) -> bool:
-    """
-    Piercing Line – 3 Kerzen (i0–i2).
-
-    Abwärtskontext: i0 bearish, i1 bearish und schließt unter i0.
-    Muster:
-      i1: bearish
-      i2: bullish, öffnet unter Tief i1, schließt über 50% des i1-Körpers
-          aber nicht über i1-Open (sonst Engulfing)
-    """
-    o, h, l, c = u.o, u.h, u.l, u.c
-    # Abwärtskontext
-    if not (u.is_bearish(0) and u.is_bearish(1) and c[1] < c[0]):
+    """Erkennung: Piercing Line (Stärke 2) - Benötigt 5 Trendkerzen + 2 Musterkerzen = 7"""
+    if u.length < 7 or not u.has_downtrend_before(-2):
         return False
-    # Muster
-    i1_midpoint = u.midpoint(1)
+        
+    target_line = u.midpoint(-2) - (u.body(-2) * PIERCING_MIDPOINT_TOLERANCE)
+    
     return (
-        u.is_bearish(1)
-        and u.is_bullish(2)
-        and o[2] < l[1]           # öffnet unter Tief i1
-        and c[2] > i1_midpoint    # schließt über 50% des i1-Körpers
-        and c[2] <= o[1]          # schließt nicht über i1-Open (sonst Engulfing)
+        u.is_bearish(-2)
+        and u.is_bullish(-1)
+        and u.o[-1] < u.l[-2]
+        and u.c[-1] > target_line
+        and u.c[-1] <= u.o[-2]
     )
 
 
 def _detect_hammer(u: _CandleUtils) -> bool:
-    """
-    Hammer – 3 Kerzen (i0–i2).
-
-    Abwärtskontext: i0 bearish, i1 bearish und schließt unter i0.
-    Muster:
-      i2: kleiner Körper oben, langer unterer Schatten (≥55% der Spanne),
-          kaum oberer Schatten (≤15%), i2-Tief ist das niedrigste Tief aller 3 Kerzen.
-    """
-    l = u.l
-    # Abwärtskontext
-    if not (u.is_bearish(0) and u.is_bearish(1) and u.c[1] < u.c[0]):
+    """Erkennung: Hammer (Stärke 1) - Benötigt 5 Trendkerzen + 1 Musterkerze = 6"""
+    if u.length < 6 or not u.has_downtrend_before(-1):
         return False
-    # Muster
-    b2   = u.body(2)
-    ls2  = u.lower_shadow(2)
-    us2  = u.upper_shadow(2)
-    span = u.h[2] - l[2]
-
-    is_lowest_low = l[2] == min(l[0], l[1], l[2])
-
+        
+    span = u.h[-1] - u.l[-1]
+    if span == 0: return False
+    
     return (
-        span > 0
-        and b2 / span < 0.35
-        and b2 / span > 0.02
-        and ls2 >= span * 0.55
-        and us2 <= span * 0.15
-        and is_lowest_low
+        u.body(-1) / span < 0.35
+        and u.body(-1) / span > 0.02
+        and u.lower_shadow(-1) >= span * 0.55
+        and u.upper_shadow(-1) <= span * 0.15
     )
 
 
-# ══════════════════════════════════════════════════════════════════════════════
-# Öffentliche API
-# ══════════════════════════════════════════════════════════════════════════════
+def detect_candle_pattern(df: pd.DataFrame, is_live_data: bool = False) -> dict:
+    """Hauptfunktion zur Erkennung bullischer Trendwenden."""
+    closed = df.iloc[:-1] if is_live_data else df
 
-def detect_candle_pattern(df: pd.DataFrame) -> dict:
-    """
-    Erkennt bullische Umkehrformationen aus abgeschlossenen Kerzen.
-
-    Die letzte Kerze im DataFrame wird als laufend (unfertig) betrachtet
-    und grundsätzlich ausgeschlossen. Die Analyse arbeitet auf df.iloc[:-1].
-
-    Benötigt mindestens 5 Zeilen (4 abgeschlossene + 1 laufende).
-
-    Parameter:
-        df: DataFrame mit Spalten open, high, low, close (lowercase).
-
-    Rückgabe:
-        dict mit:
-          pattern  (str | None) – Name des Musters oder None
-          strength (int)        – Stärke 0–5
-    """
-    # Letzte (laufende) Kerze ausschließen
-    closed = df.iloc[:-1]
-
-    if len(closed) < 4:
+    if len(closed) < 6:
         return {"pattern": None, "strength": 0}
 
-    # ── 4-Kerzen-Muster: letzte 4 abgeschlossene Kerzen (i0–i3) ──────────
-    w4 = closed.iloc[-4:].reset_index(drop=True)
-    u4 = _CandleUtils(
-        w4["open"].values, w4["high"].values,
-        w4["low"].values,  w4["close"].values,
-    )
+    u = _CandleUtils(closed.reset_index(drop=True))
 
-    if _detect_abandoned_baby(u4):
+    # WICHTIG: Die Reihenfolge ist korrekt. 
+    # Wenn Abandoned Baby oder Morning Star zutreffen, MÜSSEN wir sofort returnen,
+    # damit das Engulfing nicht fälschlicherweise als "stärkeres" oder "zweites" Signal erkannt wird.
+
+    if _detect_abandoned_baby(u):
         return {"pattern": "Bullish Abandoned Baby", "strength": 5}
 
-    if _detect_morning_star(u4):
+    if _detect_morning_star(u):
         return {"pattern": "Morning Star", "strength": 4}
 
-    # ── 3-Kerzen-Muster: letzte 3 abgeschlossene Kerzen (i0–i2) ──────────
-    w3 = closed.iloc[-3:].reset_index(drop=True)
-    u3 = _CandleUtils(
-        w3["open"].values, w3["high"].values,
-        w3["low"].values,  w3["close"].values,
-    )
-
-    if _detect_engulfing(u3):
+    if _detect_engulfing(u):
         return {"pattern": "Bullish Engulfing", "strength": 3}
 
-    if _detect_piercing(u3):
+    if _detect_piercing(u):
         return {"pattern": "Piercing Line", "strength": 2}
 
-    if _detect_hammer(u3):
+    if _detect_hammer(u):
         return {"pattern": "Hammer", "strength": 1}
 
     return {"pattern": None, "strength": 0}

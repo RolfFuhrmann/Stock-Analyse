@@ -35,7 +35,7 @@ logger = logging.getLogger(__name__)
 app = FastAPI(
     title="Stock Analysis Agent",
     description="Technische Analyse via SSE: Elliott Wave · MACD · Slow Stochastik · ML",
-    version="4.0.0",
+    version="5.0.0",
 )
 
 app.add_middleware(
@@ -48,7 +48,24 @@ app.add_middleware(
 YAHOO_SERVICE_URL      = os.getenv("YAHOO_SERVICE_URL",      "http://yahoo-service:8011")
 TWELVEDATA_SERVICE_URL = os.getenv("TWELVEDATA_SERVICE_URL", "http://twelvedata-service:8012")
 ML_SERVICE_URL         = os.getenv("ML_SERVICE_URL",         "http://ml-service:8015")
+DB_SERVICE_URL         = os.getenv("DB_SERVICE_URL",         "http://db-service:8013")
 LOOKBACK_DAYS          = int(os.getenv("LOOKBACK_DAYS", 90))
+
+# Anzahl Kerzen je Interval für die Analyse-Anzeige (Indikatoren-Fenster)
+LOOKBACK_BY_INTERVAL: dict[str, int] = {
+    "1d": 90,    # ~3 Monate Tageskerzen
+    "4h": 180,   # ~1 Monat 4h-Kerzen (30 Tage × 6 Kerzen)
+    "1h": 200,   # ~2 Wochen 1h-Kerzen
+}
+
+# Anzahl Kerzen für den ML-Service: unabhängig vom Analyse-Lookback,
+# da predictor.predict() mindestens 210 Zeilen benötigt
+# (lange Indikatoren wie sma200, dist_52w_high brauchen Historie).
+ML_LOOKBACK_BY_INTERVAL: dict[str, int] = {
+    "1d": 300,
+    "4h": 300,
+    "1h": 300,
+}
 
 # ── Session-Registry ─────────────────────────────────────────
 _stop_events: dict[str, asyncio.Event] = {}
@@ -76,11 +93,13 @@ def _get_ticker_name(ticker: str) -> str | None:
 
 # ── ML-Service Client ─────────────────────────────────────────
 
-async def _fetch_ml_signal(ticker: str) -> dict:
+async def _fetch_ml_signal(ticker: str, interval: str = "1d") -> dict:
     """
     Ruft die Umkehrwahrscheinlichkeit vom ML-Service ab.
     Gibt immer ein Dict zurück – bei Fehler mit Defaults.
     Timeout 5s: ML darf den SSE-Stream nicht blockieren.
+    interval wird im Request-Body mitgeschickt damit das Modell
+    den richtigen interval_code (Feature #39) verwenden kann.
     """
     defaults = {
         "reversal_prob":   None,
@@ -91,7 +110,10 @@ async def _fetch_ml_signal(ticker: str) -> dict:
     }
     try:
         async with httpx.AsyncClient(timeout=5.0) as client:
-            resp = await client.post(f"{ML_SERVICE_URL}/predict/{ticker}")
+            resp = await client.post(
+                f"{ML_SERVICE_URL}/predict/{ticker}",
+                json={"interval": interval, "lookback_days": ML_LOOKBACK_BY_INTERVAL.get(interval, 300)},
+            )
             if resp.status_code == 200:
                 data = resp.json()
                 return {
@@ -107,12 +129,56 @@ async def _fetch_ml_signal(ticker: str) -> dict:
     return defaults
 
 
+# ── DB-Daten für 4h/1h ───────────────────────────────────────
+
+async def _fetch_db_quote(ticker: str, interval: str) -> dict | None:
+    """
+    Lädt 4h- oder 1h-Kerzen direkt aus dem DB-Service.
+    Gibt ein Quote-Dict zurück das kompatibel zu SSE-Quotes ist:
+    { "ticker": ..., "bars": [...], "longName": ... }
+    Wird verwendet wenn interval != "1d", da Yahoo/TwelveData-SSE
+    nur für Daily/Realtime genutzt werden.
+    """
+    n = LOOKBACK_BY_INTERVAL.get(interval, 200)
+    if interval == "4h":
+        url = f"{DB_SERVICE_URL}/api/ohlcv/4h/{ticker}/latest"
+    else:  # 1h
+        url = f"{DB_SERVICE_URL}/api/ohlcv/hourly/{ticker}/latest"
+
+    try:
+        async with httpx.AsyncClient(timeout=10.0) as client:
+            resp = await client.get(url, params={"n": n})
+            if resp.status_code == 404:
+                return {"ticker": ticker, "error": f"Keine {interval}-Daten in DB", "bars": []}
+            resp.raise_for_status()
+            raw_bars = resp.json()
+
+        # DB liefert tradeTime, SSE-Analyse erwartet open/high/low/close
+        bars = [
+            {
+                "open":  b["open"],
+                "high":  b["high"],
+                "low":   b["low"],
+                "close": b["close"],
+                "volume": b.get("volume"),
+                "date":   b["tradeTime"],
+            }
+            for b in raw_bars
+        ]
+        return {"ticker": ticker, "bars": bars}
+
+    except Exception as e:
+        logger.error(f"_fetch_db_quote [{ticker}/{interval}]: {e}")
+        return {"ticker": ticker, "error": str(e), "bars": []}
+
+
 # ── Models ───────────────────────────────────────────────────
 
 class AnalyzeRequest(BaseModel):
     tickers: list[str]
     source: Literal["yahoo", "twelvedata"] = "yahoo"
-    lookback_days: int = LOOKBACK_DAYS
+    interval: Literal["1d", "4h", "1h"] = "1d"  # Analyse-Zeitrahmen
+    lookback_days: int | None = None  # None → Automatisch je Interval
     session_id: str = ""
     # ML-Signal kann pro Analyse-Run deaktiviert werden (z.B. wenn Service down)
     include_ml: bool = True
@@ -125,6 +191,7 @@ class StopRequest(BaseModel):
 class StockResult(BaseModel):
     ticker: str
     name: str | None = None
+    interval: str = "1d"          # "1d" | "4h" | "1h"
     current_price: float | None = None
     trend_pct: float | None = None
     trend_direction: str | None = None
@@ -147,10 +214,13 @@ class StockResult(BaseModel):
 
 # ── Analyse ───────────────────────────────────────────────────
 
-def analyse_quote(quote: dict, lookback: int, source: str) -> StockResult:
+def analyse_quote(quote: dict, lookback: int, source: str, interval: str = "1d") -> StockResult:
     """
     Regelbasierte Analyse (Elliott Wave + MACD + Stochastik + Candle).
     ML-Signal wird separat in analysis_stream ergänzt.
+
+    interval: "1d" | "4h" | "1h" – wird im StockResult mitgegeben
+    damit Angular den richtigen Zeitrahmen anzeigen kann.
 
     Semantik der Indikatoren:
       bull-Indikator erkennt: Abwärtswelle + MACD<0 + Stoch<20 → Trend BEARISH
@@ -167,7 +237,7 @@ def analyse_quote(quote: dict, lookback: int, source: str) -> StockResult:
 
     if quote.get("error") or not quote.get("bars"):
         return StockResult(
-            ticker=ticker, name=name,
+            ticker=ticker, name=name, interval=interval,
             elliott_wave=False, stochastic=False, macd_histogram=False,
             criteria_met=0, source=source,
             error=quote.get("error", "Keine Kursdaten"),
@@ -215,6 +285,7 @@ def analyse_quote(quote: dict, lookback: int, source: str) -> StockResult:
         return StockResult(
             ticker=ticker,
             name=name,
+            interval=interval,
             current_price=price,
             trend_pct=trend_pct,
             trend_direction=trend_direction,
@@ -232,9 +303,51 @@ def analyse_quote(quote: dict, lookback: int, source: str) -> StockResult:
         return StockResult(
             ticker=ticker,
             name=name if "name" in dir() else None,
+            interval=interval,
             elliott_wave=False, stochastic=False, macd_histogram=False,
             criteria_met=0, source=source, error=str(e),
         )
+
+
+# ── DB-Stream für 4h/1h ──────────────────────────────────────
+
+async def _db_analysis_stream(
+    tickers: list[str],
+    source: str,
+    interval: str,
+    lookback: int,
+    session_id: str,
+    include_ml: bool,
+    stop_event,
+) -> AsyncGenerator:
+    """
+    Analyse-Stream für 4h/1h: Kerzen kommen aus der DB (kein SSE).
+    Jeder Ticker wird sequenziell verarbeitet und sofort gepusht.
+    """
+    for ticker in tickers:
+        if stop_event and stop_event.is_set():
+            yield {"event": "done", "data": json.dumps({"message": "Stream gestoppt"})}
+            return
+
+        quote  = await _fetch_db_quote(ticker, interval)
+        result = analyse_quote(quote, lookback, source, interval)
+
+        if include_ml and not result.error:
+            ml = await _fetch_ml_signal(result.ticker, interval=interval)
+            result.reversal_prob  = ml["reversal_prob"]
+            result.reversal_pct   = ml["reversal_pct"]
+            result.ml_signal      = ml["signal"]
+            result.ml_confidence  = ml["confidence"]
+            result.ml_available   = ml["model_available"]
+            logger.info(
+                f"  {result.ticker} [{interval}]: ML signal={ml['signal']} "
+                f"prob={ml['reversal_pct']}%"
+            )
+
+        yield {"event": "result", "data": result.model_dump_json()}
+
+    yield {"event": "done", "data": json.dumps({"message": "Analyse abgeschlossen"})}
+    _stop_events.pop(session_id, None)
 
 
 # ── SSE Proxy Generator ───────────────────────────────────────
@@ -242,18 +355,29 @@ def analyse_quote(quote: dict, lookback: int, source: str) -> StockResult:
 async def analysis_stream(
     tickers: list[str],
     source: str,
+    interval: str,
     lookback: int,
     session_id: str,
     include_ml: bool,
 ) -> AsyncGenerator:
-    service_url = YAHOO_SERVICE_URL if source == "yahoo" else TWELVEDATA_SERVICE_URL
-    outputsize  = lookback + 40
-    stop_event  = _stop_events.get(session_id)
+    stop_event = _stop_events.get(session_id)
 
     logger.info(
-        f"Analyse via '{source}' für {len(tickers)} Ticker "
+        f"Analyse via '{source}' [{interval}] für {len(tickers)} Ticker "
         f"(session={session_id}, ml={include_ml})"
     )
+
+    # ── 4h / 1h: Kerzen aus DB, kein SSE ────────────────────
+    if interval in ("4h", "1h"):
+        async for event in _db_analysis_stream(
+            tickers, source, interval, lookback, session_id, include_ml, stop_event
+        ):
+            yield event
+        return
+
+    # ── 1d: bisheriger SSE-Pfad bleibt unverändert ───────────
+    service_url = YAHOO_SERVICE_URL if source == "yahoo" else TWELVEDATA_SERVICE_URL
+    outputsize  = lookback + 40
 
     async with httpx.AsyncClient(timeout=None) as client:
         async with client.stream(
@@ -292,7 +416,7 @@ async def analysis_stream(
                             # Nur wenn kein Fehler und ML aktiviert.
                             # Läuft parallel zur nächsten Iteration (non-blocking).
                             if include_ml and not result.error:
-                                ml = await _fetch_ml_signal(result.ticker)
+                                ml = await _fetch_ml_signal(result.ticker, interval="1d")
                                 result.reversal_prob  = ml["reversal_prob"]
                                 result.reversal_pct   = ml["reversal_pct"]
                                 result.ml_signal      = ml["signal"]
@@ -345,11 +469,15 @@ async def stream_analysis(request: AnalyzeRequest):
     session_id = request.session_id or str(uuid.uuid4())
     _stop_events[session_id] = asyncio.Event()
 
+    # Lookback: explizit gesetzt oder Automatik je Interval
+    lookback = request.lookback_days or LOOKBACK_BY_INTERVAL.get(request.interval, 90)
+
     return EventSourceResponse(
         analysis_stream(
             request.tickers,
             request.source,
-            request.lookback_days,
+            request.interval,
+            lookback,
             session_id,
             request.include_ml,
         )

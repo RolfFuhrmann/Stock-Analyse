@@ -19,6 +19,12 @@ class Settings(BaseSettings):
     initial_hourly_hours: int = 8760
     # Tageskerzen für den täglichen Update-Lauf (10 Tage Puffer)
     update_daily_days:   int = 10
+    # 4h-Kerzen: 6 Monate initiale Tiefe (6 × 30 × 6 Kerzen/Tag ≈ 1080)
+    initial_4h_candles:  int = 1080
+    # 4h-Kerzen: Update-Puffer (7 Tage × 6 Kerzen/Tag)
+    update_4h_candles:   int = 42
+    # 1h-Kerzen: Update-Puffer in Stunden (24h ≈ 1 Handelstag Reserve)
+    update_hourly_buffer_hours: int = 24
 
     # ── Scheduler ─────────────────────────────────────────────
     # Uhrzeit für den täglichen Update-Lauf (nach Börsenschluss)
@@ -30,6 +36,10 @@ class Settings(BaseSettings):
     stream_timeout_sec: int = 120
     # Pause zwischen zwei Ticker-Abrufen bei Yahoo (kurz)
     ticker_delay_sec:        float = 0.5
+    # Pause nach JEDEM Yahoo-Request (Anti-Scraping/Rate-Limit beim
+    # VPN-Gateway). Wichtig bei mehreren Yahoo-Calls pro Ticker
+    # (daily + hourly + 4h-Aggregation = 3 Requests in Folge).
+    yahoo_delay_sec:         float = 2.0
     # Pause nach JEDEM TwelveData-Request (Free Plan: 8 req/min = 7.5s)
     # daily + hourly = 2 Requests pro Ticker → 8s Pause nach jedem Request
     twelvedata_delay_sec:    float = 8.0

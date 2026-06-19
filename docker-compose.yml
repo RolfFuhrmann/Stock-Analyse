@@ -46,6 +46,7 @@ services:
     environment:
       - YAHOO_SERVICE_URL=http://yahoo-service:8011
       - TWELVEDATA_SERVICE_URL=http://twelvedata-service:8012
+      - DB_SERVICE_URL=http://db-service:8013
       - ML_SERVICE_URL=http://ml-service:8015
     depends_on:
       - vpn

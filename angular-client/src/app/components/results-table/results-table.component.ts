@@ -52,6 +52,18 @@ type SortDir = 'asc' | 'desc' | null;
           </td>
         </ng-container>
 
+        <!-- Zeitrahmen -->
+        <ng-container matColumnDef="interval">
+          <th mat-header-cell *matHeaderCellDef class="col-center">
+            TF
+          </th>
+          <td mat-cell *matCellDef="let row" class="col-center">
+            <span [class]="'interval-badge interval-' + (row.interval ?? '1d')">
+              {{ (row.interval ?? '1d').toUpperCase() }}
+            </span>
+          </td>
+        </ng-container>
+
         <!-- Kurs -->
         <ng-container matColumnDef="price">
           <th mat-header-cell *matHeaderCellDef class="col-right sortable-header" (click)="sortBy('price')">
@@ -348,6 +360,20 @@ type SortDir = 'asc' | 'desc' | null;
     .ml-signal-label { font-size: 11px; }
     .ml-unavailable  { color: #d1d5db; font-size: 13px; }
 
+    /* Zeitrahmen-Badge */
+    .interval-badge {
+      display: inline-block;
+      padding: 2px 7px;
+      border-radius: 4px;
+      font-size: 10px;
+      font-weight: 700;
+      font-family: 'SF Mono', Monaco, monospace;
+      letter-spacing: 0.04em;
+    }
+    .interval-1d { background: #eff6ff; color: #1d4ed8; border: 1px solid #bfdbfe; }
+    .interval-4h { background: #f0fdf4; color: #166534; border: 1px solid #bbf7d0; }
+    .interval-1h { background: #faf5ff; color: #6b21a8; border: 1px solid #e9d5ff; }
+
     .legend {
       display: flex;
       align-items: center;
@@ -365,7 +391,7 @@ export class ResultsTableComponent {
   readonly results = input.required<StockResult[]>();
 
   readonly displayedColumns = [
-    'ticker', 'name', 'price', 'trend', 'direction',
+    'ticker', 'name', 'interval', 'price', 'trend', 'direction',
     'elliott', 'stochastic', 'macd', 'score', 'candle', 'ml'
   ];
 

@@ -24,8 +24,11 @@ export class PdfExportService {
   }
 
   private buildHtml(results: StockResult[], summary: AnalysisSummary): string {
-    const timestamp  = new Date().toLocaleString('de-DE');
+    const timestamp   = new Date().toLocaleString('de-DE');
     const sourceLabel = summary.source === 'yahoo' ? 'Yahoo Finance' : 'Twelve Data';
+    const firstResult = results[0];
+    const intervalLabel: Record<string, string> = { '1d': 'Daily', '4h': '4 Stunden', '1h': '1 Stunde' };
+    const tfLabel = firstResult ? (intervalLabel[firstResult.interval ?? '1d'] ?? 'Daily') : 'Daily';
 
     return `<!DOCTYPE html>
 <html lang="de">
@@ -82,7 +85,7 @@ export class PdfExportService {
 </head>
 <body>
   <h1>◎ Stock Analyse</h1>
-  <div class="meta">Erstellt: ${timestamp} · Datenquelle: ${sourceLabel}</div>
+  <div class="meta">Erstellt: ${timestamp} · Datenquelle: ${sourceLabel} · Zeitrahmen: ${tfLabel}</div>
 
   <div class="kpi-row">
     <div class="kpi">

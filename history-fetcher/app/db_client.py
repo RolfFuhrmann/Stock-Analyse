@@ -93,7 +93,66 @@ async def get_latest_daily_date(ticker: str) -> date | None:
     return date.fromisoformat(meta["newestDaily"])
 
 
+# ── 4-Stunden-Kerzen ──────────────────────────────────────────
+
+async def bulk_insert_4h(
+    ticker: str,
+    source: str,
+    bars: list[dict],
+) -> dict:
+    """
+    Speichert 4h-Kerzen in ohlcv_4h.
+    bars: Liste von Dicts mit keys: tradeTime, open, high, low, close, volume
+    """
+    payload = {
+        "ticker": ticker,
+        "source": source,
+        "bars":   bars,
+    }
+    async with httpx.AsyncClient(timeout=TIMEOUT) as client:
+        resp = await client.post(f"{BASE}/api/ohlcv/4h/bulk", json=payload)
+        if resp.status_code in (200, 201):
+            return resp.json()
+        logger.error(f"bulk_insert_4h [{ticker}]: {resp.status_code} {resp.text}")
+        return {"inserted": 0, "skipped": 0, "message": resp.text}
+
+
+async def get_latest_4h_time(ticker: str) -> datetime | None:
+    """
+    Gibt den neuesten vorhandenen Zeitstempel in ohlcv_4h zurück.
+    Wird für inkrementelle 4h-Updates verwendet.
+    """
+    async with httpx.AsyncClient(timeout=TIMEOUT) as client:
+        resp = await client.get(
+            f"{BASE}/api/ohlcv/4h/{ticker}/latest",
+            params={"n": 1},
+        )
+        if resp.status_code == 200:
+            bars = resp.json()
+            if bars:
+                return datetime.fromisoformat(bars[0]["tradeTime"])
+        return None
+
+
 # ── Stundenkerzen ─────────────────────────────────────────────
+
+async def get_latest_hourly_time(ticker: str) -> datetime | None:
+    """
+    Gibt den neuesten vorhandenen Zeitstempel in ohlcv_hourly zurück.
+    Wird für inkrementelle 1h-Updates verwendet (analog zu get_latest_4h_time).
+    """
+    async with httpx.AsyncClient(timeout=TIMEOUT) as client:
+        resp = await client.get(
+            f"{BASE}/api/ohlcv/hourly/{ticker}/latest",
+            params={"n": 1},
+        )
+        if resp.status_code == 200:
+            bars = resp.json()
+            if bars:
+                return datetime.fromisoformat(bars[0]["tradeTime"])
+        return None
+
+
 
 async def bulk_insert_hourly(
     ticker: str,
