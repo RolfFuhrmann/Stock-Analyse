@@ -135,6 +135,12 @@ export class PdfExportService {
       : '–';
     const badge    = (v: boolean) =>
       `<span class="badge ${v ? 'badge-true' : 'badge-false'}">${v ? 'True' : 'False'}</span>`;
+    const elliottLabel = r.elliott_wave
+      ? (r.trend_direction === 'bearish' ? 'A-B-C' : r.trend_direction === 'bullish' ? '1-2-3-4-5' : '')
+      : '';
+    const elliott  = elliottLabel
+      ? `<span class="badge badge-true">${elliottLabel}</span>`
+      : '–';
     const score    = `<span class="badge score-${r.criteria_met}">${r.criteria_met}/3</span>`;
     const candle   = r.candle_pattern
       ? `<span class="candle-badge candle-s${r.candle_strength}">${r.candle_pattern}</span>`
@@ -149,7 +155,7 @@ export class PdfExportService {
       <td><span class="ticker-name">${r.ticker}</span>${r.error ? `<div style="color:#ef4444;font-size:9px">${r.error}</div>` : ''}</td>
       <td class="td-right">${price}</td>
       <td class="td-right">${trend}</td>
-      <td class="td-center">${badge(r.elliott_wave)}</td>
+      <td class="td-center">${elliott}</td>
       <td class="td-center">${badge(r.stochastic)}</td>
       <td class="td-center">${badge(r.macd_histogram)}</td>
       <td class="td-center">${score}</td>

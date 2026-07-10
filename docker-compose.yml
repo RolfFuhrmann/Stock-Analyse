@@ -55,7 +55,28 @@ services:
     networks:
       - stock-net
 
-  # ── Yahoo Finance Service (Läuft ÜBER VPN) ───────────────────
+  # ── Agent Service Java (:8016) ──────────────────────────────
+  agent-service-java:
+    build:
+      context: ./agent-service-java
+      dockerfile: Dockerfile
+    container_name: stock_agent_java
+    restart: unless-stopped
+    ports:
+      - "8016:8016"
+    environment:
+      - YAHOO_SERVICE_URL=http://yahoo-service:8011
+      - TWELVEDATA_SERVICE_URL=http://twelvedata-service:8012
+      - DB_SERVICE_URL=http://db-service:8013
+      - ML_SERVICE_URL=http://ml-service:8015
+    depends_on:
+      - vpn
+      - twelvedata-service
+      - ml-service
+    networks:
+      - stock-net
+
+  # ── Yahoo Finance Service (Läuft über VPN) ───────────────────
   yahoo-service:
     build:
       context: ./yahoo-service
@@ -94,7 +115,7 @@ services:
     volumes:
       - mysql_data:/var/lib/mysql
     ports:
-    - "3306:3306"
+      - "3306:3306"
     networks:
       - stock-net
     healthcheck:
@@ -190,7 +211,7 @@ services:
     ports:
       - "4200:80"
     depends_on:
-      - agent-service
+      - agent-service-java
     networks:
       - stock-net
 

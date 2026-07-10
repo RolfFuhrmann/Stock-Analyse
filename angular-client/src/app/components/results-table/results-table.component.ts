@@ -6,7 +6,7 @@ import { MatTooltipModule } from '@angular/material/tooltip';
 import { MatIconModule } from '@angular/material/icon';
 import { StockResult } from '../../models/stock.models';
 
-type SortColumn = 'ticker' | 'name' | 'price' | 'trend' | 'direction' | 'elliott' | 'stochastic' | 'macd' | 'score' | 'candle' | 'ml';
+type SortColumn = 'ticker' | 'name' | 'price' | 'trend' | 'elliott' | 'stochastic' | 'macd' | 'score' | 'candle' | 'ml';
 type SortDir = 'asc' | 'desc' | null;
 
 /**
@@ -88,29 +88,15 @@ type SortDir = 'asc' | 'desc' | null;
           </td>
         </ng-container>
 
-        <!-- Richtung -->
-        <ng-container matColumnDef="direction">
-          <th mat-header-cell *matHeaderCellDef class="col-center sortable-header" (click)="sortBy('direction')">
-            Richtung <mat-icon class="sort-icon">{{ sortIcon('direction') }}</mat-icon>
-          </th>
-          <td mat-cell *matCellDef="let row" class="col-center">
-            @if (row.trend_direction === 'bullish') {
-              <span class="direction-bullish">▲ Bullish</span>
-            } @else if (row.trend_direction === 'bearish') {
-              <span class="direction-bearish">▼ Bearish</span>
-            } @else {
-              <span class="direction-none">–</span>
-            }
-          </td>
-        </ng-container>
-
         <!-- Elliott Wave -->
         <ng-container matColumnDef="elliott">
           <th mat-header-cell *matHeaderCellDef class="col-center sortable-header" (click)="sortBy('elliott')">
             Elliott Wave <mat-icon class="sort-icon">{{ sortIcon('elliott') }}</mat-icon>
           </th>
           <td mat-cell *matCellDef="let row" class="col-center">
-            <span [class]="badgeClass(row.elliott_wave)">{{ row.elliott_wave ? 'True' : 'False' }}</span>
+            @if (elliottWaveLabel(row); as label) {
+              <span class="elliott-badge">{{ label }}</span>
+            }
           </td>
         </ng-container>
 
@@ -311,25 +297,17 @@ type SortDir = 'asc' | 'desc' | null;
     .candle-s1 { background: #f3f4f6; color: #374151; border: 1px solid #e5e7eb; }
     .candle-none { color: #d1d5db; font-size: 13px; }
 
-    .direction-bullish {
+    .elliott-badge {
       display: inline-block;
       padding: 3px 10px;
       border-radius: 20px;
       font-size: 12px;
       font-weight: 600;
-      background: #dcfce7;
-      color: #166534;
+      font-family: 'SF Mono', Monaco, monospace;
+      background: #eff6ff;
+      color: #1d4ed8;
+      border: 1px solid #bfdbfe;
     }
-    .direction-bearish {
-      display: inline-block;
-      padding: 3px 10px;
-      border-radius: 20px;
-      font-size: 12px;
-      font-weight: 600;
-      background: #fee2e2;
-      color: #991b1b;
-    }
-    .direction-none { color: #d1d5db; font-size: 13px; }
 
     .col-name {
       font-size: 12px;
@@ -391,7 +369,7 @@ export class ResultsTableComponent {
   readonly results = input.required<StockResult[]>();
 
   readonly displayedColumns = [
-    'ticker', 'name', 'interval', 'price', 'trend', 'direction',
+    'ticker', 'name', 'interval', 'price', 'trend',
     'elliott', 'stochastic', 'macd', 'score', 'candle', 'ml'
   ];
 
@@ -418,7 +396,6 @@ export class ResultsTableComponent {
         case 'stochastic': return f * (Number(a.stochastic) - Number(b.stochastic));
         case 'macd':       return f * (Number(a.macd_histogram) - Number(b.macd_histogram));
         case 'score':      return f * (a.criteria_met - b.criteria_met);
-        case 'direction':  return f * ((a.trend_direction ?? '').localeCompare(b.trend_direction ?? ''));
         case 'candle':     return f * ((a.candle_strength ?? 0) - (b.candle_strength ?? 0));
         case 'ml':         return f * ((a.reversal_pct ?? -1) - (b.reversal_pct ?? -1));
         default:           return 0;
@@ -451,6 +428,26 @@ export class ResultsTableComponent {
 
   badgeClass(value: boolean): string {
     return value ? 'badge-true' : 'badge-false';
+  }
+
+  /**
+   * Text für die erkannte Elliott-Welle.
+   * trend_direction === 'bearish' → Bull-Indikator hat gewonnen → Abwärtswelle A-B-C.
+   * trend_direction === 'bullish' → Bear-Indikator hat gewonnen → Aufwärtswelle 1-2-3-4-5.
+   * (Semantik-Invertierung ist Absicht, siehe AnalysisService.)
+   * Ohne eindeutige Welle wird ein leerer String zurückgegeben → keine Anzeige.
+   */
+  elliottWaveLabel(row: StockResult): string {
+    if (!row.elliott_wave) {
+      return '';
+    }
+    if (row.trend_direction === 'bearish') {
+      return 'A-B-C';
+    }
+    if (row.trend_direction === 'bullish') {
+      return '1-2-3-4-5';
+    }
+    return '';
   }
 
   mlSignalLabel(signal: string): string {
