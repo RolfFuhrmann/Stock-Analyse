@@ -65,16 +65,19 @@ Because Yahoo Finance uses aggressive anti‑scraping mechanisms, the `yahoo-ser
 On the first start, the History Fetcher automatically fills the database with historical price data (5 years of daily data + hourly data for all ticker lists). Depending on the TwelveData rate limit, this takes about 15–30 minutes.
 
 **Monitor progress:**
+
 ```bash
 docker logs -f stock_history_fetcher
 ```
 
 **Check status:**
+
 ```bash
 curl http://localhost:8014/coverage
 ```
 
 **Restart manually (if needed):**
+
 ```bash
 curl -X POST http://localhost:8014/fetch/initial
 ```
@@ -99,6 +102,7 @@ docker logs -f stock_ml_service
 The model is automatically retrained every Sunday at 02:00.
 
 **ML signal in the result:**
+
 - `reversal_pct`: Probability of an upward reversal in the next 5 days (0–100%)
 - `ml_signal`: `none` | `weak` | `moderate` | `strong`
 - Displayed in the Angular table as a color‑coded badge in the AI signal column
@@ -110,16 +114,19 @@ The model is automatically retrained every Sunday at 02:00.
 If Yahoo blocks the current VPN IP (`YFRateLimitError`), Gluetun can immediately switch to a fresh, unblocked Proton server.
 
 ### 🔄 Disconnect and reconnect (request a fresh IP)
+
 ```bash
 docker exec vpn kill -HUP 1
 ```
 
 ### 🔍 Check IP address and location of the Yahoo service
+
 ```bash
 docker run --rm --network=container:vpn alpine sh -c "wget -qO- https://ipinfo.io"
 ```
 
 ### 📋 Show VPN logs
+
 ```bash
 docker logs vpn
 ```
@@ -128,25 +135,25 @@ docker logs vpn
 
 ## Services & Ports
 
-| Service                  | Port  | Description                                           |
-| ------------------------ | ----- | ----------------------------------------------------- |
-| Agent Service            | 8010  | AI agent · SSE proxy · Elliott/MACD/Stochastic · ML  |
-| VPN Gateway              | 8011  | Gluetun VPN · Forwards port 8011 to Yahoo            |
-| Yahoo Service            | –     | Yahoo Finance · Runs inside VPN network              |
-| TwelveData Service       | 8012  | Twelve Data API · SSE · 8s delay per ticker (Free)   |
-| DB Access Service        | 8013  | MySQL · Ticker lists · OHLCV data · REST API         |
-| History Fetcher          | 8014  | Historical data population · Daily updates           |
-| ML Service               | 8015  | XGBoost · Reversal probability · Weekly retraining   |
-| Angular Client           | 4200  | Web UI · Real‑time results · AI signal column        |
+| Service            | Port | Description                                         |
+| ------------------ | ---- | --------------------------------------------------- |
+| Agent Service      | 8010 | AI agent · SSE proxy · Elliott/MACD/Stochastic · ML |
+| VPN Gateway        | 8011 | Gluetun VPN · Forwards port 8011 to Yahoo           |
+| Yahoo Service      | –    | Yahoo Finance · Runs inside VPN network             |
+| TwelveData Service | 8012 | Twelve Data API · SSE · 8s delay per ticker (Free)  |
+| DB Access Service  | 8013 | MySQL · Ticker lists · OHLCV data · REST API        |
+| History Fetcher    | 8014 | Historical data population · Daily updates          |
+| ML Service         | 8015 | XGBoost · Reversal probability · Weekly retraining  |
+| Angular Client     | 4200 | Web UI · Real‑time results · AI signal column       |
 
 ### Swagger Docs
 
-- Agent:       http://localhost:8010/docs  
-- Yahoo:       http://localhost:8011/docs (via VPN gateway)  
-- TwelveData:  http://localhost:8012/docs  
-- DB Access:   http://localhost:8013/swagger-ui.html  
-- History:     http://localhost:8014/docs  
-- ML Service:  http://localhost:8015/docs  
+- Agent: http://localhost:8010/docs
+- Yahoo: http://localhost:8011/docs (via VPN gateway)
+- TwelveData: http://localhost:8012/docs
+- DB Access: http://localhost:8013/swagger-ui.html
+- History: http://localhost:8014/docs
+- ML Service: http://localhost:8015/docs
 
 ---
 
@@ -167,25 +174,25 @@ The `stock-data-db-access` service is a **Spring Boot 3 / Java 21** microservice
 
 ### Database Schema (Flyway V1–V4)
 
-| Table              | Description                                           |
-| ------------------ | ----------------------------------------------------- |
-| `ticker_lists`     | Lists with code, name, source, and ticker format      |
-| `ticker_symbols`   | Individual tickers per list (raw_symbol)              |
-| `ticker_meta`      | Normalized API symbols (e.g., ADS → ADS.DE), ISIN     |
-| `ohlcv_daily`      | Daily OHLCV candles (5 years, unique per ticker+date) |
-| `ohlcv_hourly`     | Hourly OHLCV candles (12 months)                      |
-| `fetch_log`        | Log of all data fetches (SUCCESS/ERROR/PARTIAL)       |
+| Table            | Description                                           |
+| ---------------- | ----------------------------------------------------- |
+| `ticker_lists`   | Lists with code, name, source, and ticker format      |
+| `ticker_symbols` | Individual tickers per list (raw_symbol)              |
+| `ticker_meta`    | Normalized API symbols (e.g., ADS → ADS.DE), ISIN     |
+| `ohlcv_daily`    | Daily OHLCV candles (5 years, unique per ticker+date) |
+| `ohlcv_hourly`   | Hourly OHLCV candles (12 months)                      |
+| `fetch_log`      | Log of all data fetches (SUCCESS/ERROR/PARTIAL)       |
 
 ### Important REST Endpoints
 
-| Method | Path                                   | Description                          |
-| ------ | -------------------------------------- | ------------------------------------- |
-| GET    | `/api/lists`                           | All ticker lists                      |
-| GET    | `/api/lists/code/{code}/raw-symbols`   | Raw symbols of a list                 |
-| GET    | `/api/ohlcv/daily/{ticker}/latest?n=` | Latest N daily candles                |
-| POST   | `/api/ohlcv/daily/bulk`                | Bulk insert daily candles (idempotent) |
-| POST   | `/api/ohlcv/hourly/bulk`               | Bulk insert hourly candles            |
-| GET    | `/api/ohlcv/coverage`                  | Data coverage overview                |
+| Method | Path                                  | Description                            |
+| ------ | ------------------------------------- | -------------------------------------- |
+| GET    | `/api/lists`                          | All ticker lists                       |
+| GET    | `/api/lists/code/{code}/raw-symbols`  | Raw symbols of a list                  |
+| GET    | `/api/ohlcv/daily/{ticker}/latest?n=` | Latest N daily candles                 |
+| POST   | `/api/ohlcv/daily/bulk`               | Bulk insert daily candles (idempotent) |
+| POST   | `/api/ohlcv/hourly/bulk`              | Bulk insert hourly candles             |
+| GET    | `/api/ohlcv/coverage`                 | Data coverage overview                 |
 
 ---
 
@@ -275,4 +282,4 @@ angular-client/
 
 ---
 
-*Not financial advice. Technical analysis is for informational purposes only.*
+_Not financial advice. Technical analysis is for informational purposes only._

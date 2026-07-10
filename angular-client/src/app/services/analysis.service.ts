@@ -16,7 +16,7 @@ import { DataSource, Interval, StockResult } from '../models/stock.models';
  */
 @Injectable({ providedIn: 'root' })
 export class AnalysisService {
-  private readonly agentUrl = 'http://localhost:8010';
+  private readonly agentUrl = 'http://localhost:8016';
 
   /** Aktiver AbortController – ermöglicht sofortigen lokalen Abbruch */
   private _abortController: AbortController | null = null;
@@ -90,13 +90,13 @@ export class AnalysisService {
           };
 
           reader.read().then(processChunk).catch((e) => {
-            // AbortError ist kein echter Fehler – der Nutzer hat gestoppt
-            if (e?.name !== 'AbortError') {
-              observer.error(e);
-            } else {
-              observer.complete();
-            }
-          });
+              // AbortError ist kein echter Fehler – der Nutzer hat gestoppt
+              if (e?.name !== 'AbortError') {
+                observer.error(e);
+              } else {
+                observer.complete();
+              }
+            });
         })
         .catch((e) => {
           if (e?.name !== 'AbortError') {

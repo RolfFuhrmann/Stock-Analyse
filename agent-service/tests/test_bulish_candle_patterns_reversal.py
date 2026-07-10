@@ -12,8 +12,8 @@ import pytest
 from bullish_candle_pattern_reversal import detect_candle_pattern
 
 
-def make_bar(o: float, h: float, l: float, c: float) -> dict:
-    return {"open": o, "high": h, "low": l, "close": c}
+def make_bar(open: float, high: float, low: float, close: float) -> dict:
+    return {"open": open, "high": high, "low": low, "close": close}
 
 
 def make_df_with_live_candle(bars: list[dict]) -> pd.DataFrame:
