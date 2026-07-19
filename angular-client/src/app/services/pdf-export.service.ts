@@ -64,6 +64,7 @@ export class PdfExportService {
     .badge { display: inline-block; padding: 2px 8px; border-radius: 20px; font-size: 9px; font-weight: 600; }
     .badge-true  { background: #dcfce7; color: #166534; }
     .badge-false { background: #f3f4f6; color: #6b7280; }
+    .badge-bearish { background: #fee2e2; color: #991b1b; }
     .score-3 { background: #dcfce7; color: #166534; }
     .score-2 { background: #fef9c3; color: #854d0e; }
     .score-1, .score-0 { background: #f3f4f6; color: #9ca3af; }
@@ -109,6 +110,7 @@ export class PdfExportService {
         <th class="th-right">Kurs</th>
         <th class="th-right">Trend</th>
         <th>Elliott Wave</th>
+        <th>Richtung</th>
         <th>Stochastik</th>
         <th>MACD-Histogramm</th>
         <th>Score</th>
@@ -141,6 +143,11 @@ export class PdfExportService {
     const elliott  = elliottLabel
       ? `<span class="badge badge-true">${elliottLabel}</span>`
       : '–';
+    const direction = r.macd_stoch_direction === 'bullish'
+      ? `<span class="badge badge-true">▲ Bullish</span>`
+      : r.macd_stoch_direction === 'bearish'
+        ? `<span class="badge badge-bearish">▼ Bearish</span>`
+        : '–';
     const score    = `<span class="badge score-${r.criteria_met}">${r.criteria_met}/3</span>`;
     const candle   = r.candle_pattern
       ? `<span class="candle-badge candle-s${r.candle_strength}">${r.candle_pattern}</span>`
@@ -156,6 +163,7 @@ export class PdfExportService {
       <td class="td-right">${price}</td>
       <td class="td-right">${trend}</td>
       <td class="td-center">${elliott}</td>
+      <td class="td-center">${direction}</td>
       <td class="td-center">${badge(r.stochastic)}</td>
       <td class="td-center">${badge(r.macd_histogram)}</td>
       <td class="td-center">${score}</td>

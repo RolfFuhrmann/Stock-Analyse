@@ -22,6 +22,15 @@ export interface StockResult {
   trend_pct: number | null;
   /** Erkannte Richtung der Umkehr: "bullish", "bearish" oder null */
   trend_direction: 'bullish' | 'bearish' | null;
+  /**
+   * Eigenständige Richtung, rein aus MACD-Histogramm + Stochastik abgeleitet
+   * (unabhängig davon, welcher Indikator für elliott_wave/trend_direction
+   * "gewonnen" hat):
+   *   "bullish" – MACD-Histogramm > 0 UND Stochastik > 80
+   *   "bearish" – MACD-Histogramm < 0 UND Stochastik < 20
+   *   null      – keines von beidem eindeutig erfüllt
+   */
+  macd_stoch_direction: 'bullish' | 'bearish' | null;
   elliott_wave: boolean;
   stochastic: boolean;
   macd_histogram: boolean;
