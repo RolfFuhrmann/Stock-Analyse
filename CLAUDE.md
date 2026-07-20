@@ -57,12 +57,14 @@ Nutzer wählen Ticker, Datenquelle und Zeitraum – der Agent analysiert und str
 ```
 
 **VPN-Routing:**
+
 - `yahoo-service` hat `network_mode: "container:vpn"` – teilt Netzwerk-Namespace mit Gluetun
 - Alle Yahoo-Anfragen gehen durch den WireGuard-Tunnel (Proton VPN, Standard: Niederlande)
 - Der VPN-Container erhält den Alias `yahoo-service` im `stock-net` und leitet Port 8011 weiter
 - `agent-service` spricht Yahoo über `http://yahoo-service:8011` (= VPN-Gateway)
 
 **Kommunikation:**
+
 - Client → Agent: `POST /analyze/stream` (JSON Body)
 - Agent → Client: Server-Sent Events (SSE), Event-Typen: `result`, `done`
 - Agent → ML: `POST /predict/{ticker}` (5s Timeout, non-blocking)
@@ -116,36 +118,36 @@ export interface StockResult {
   elliott_wave: boolean;
   stochastic: boolean;
   macd_histogram: boolean;
-  criteria_met: number;         // 0–3
+  criteria_met: number; // 0–3
   source: string;
   candle_pattern: string | null;
   candle_strength: number;
   // ML-Felder
-  reversal_prob:  number | null; // 0.0–1.0
-  reversal_pct:   number | null; // 0–100
-  ml_signal:      'none' | 'weak' | 'moderate' | 'strong';
-  ml_confidence:  'low' | 'medium' | 'high';
-  ml_available:   boolean;
+  reversal_prob: number | null; // 0.0–1.0
+  reversal_pct: number | null; // 0–100
+  ml_signal: 'none' | 'weak' | 'moderate' | 'strong';
+  ml_confidence: 'low' | 'medium' | 'high';
+  ml_available: boolean;
   error: string | null;
 }
 ```
 
 ### 3.2 Agent Service (`agent-service/`)
 
-| Eigenschaft  | Wert                           |
-| ------------ | ------------------------------ |
-| Sprache      | Python 3.12                    |
-| Framework    | FastAPI + sse-starlette        |
-| Port         | 8010                           |
-| Version      | 4.0.0                          |
+| Eigenschaft | Wert                    |
+| ----------- | ----------------------- |
+| Sprache     | Python 3.12             |
+| Framework   | FastAPI + sse-starlette |
+| Port        | 8010                    |
+| Version     | 4.0.0                   |
 
 **Endpunkte:**
 
-| Method | Path              | Beschreibung                        |
-| ------ | ----------------- | ----------------------------------- |
-| GET    | `/health`         | Liveness-Check inkl. Service-URLs   |
-| POST   | `/analyze/stream` | Startet SSE-Analyse-Stream          |
-| POST   | `/analyze/stop`   | Bricht laufenden Stream ab          |
+| Method | Path              | Beschreibung                      |
+| ------ | ----------------- | --------------------------------- |
+| GET    | `/health`         | Liveness-Check inkl. Service-URLs |
+| POST   | `/analyze/stream` | Startet SSE-Analyse-Stream        |
+| POST   | `/analyze/stop`   | Bricht laufenden Stream ab        |
 
 **Request Body (`POST /analyze/stream`):**
 
@@ -176,13 +178,13 @@ data: {"message": "Analyse abgeschlossen"}
 
 ### 3.2b Agent Service Java (`agent-service-java/`)
 
-| Eigenschaft  | Wert                                        |
-| ------------ | -------------------------------------------- |
-| Sprache      | Java 25                                     |
-| Framework    | Spring Boot 4.1 + WebFlux (reaktiv)         |
-| Port         | 8016                                        |
-| Container    | `stock_agent_java`                          |
-| Status       | **Produktiv über docker-compose** (Stand 07/2026) |
+| Eigenschaft | Wert                                              |
+| ----------- | ------------------------------------------------- |
+| Sprache     | Java 25                                           |
+| Framework   | Spring Boot 4.1 + WebFlux (reaktiv)               |
+| Port        | 8016                                              |
+| Container   | `stock_agent_java`                                |
+| Status      | **Produktiv über docker-compose** (Stand 07/2026) |
 
 Java/Spring-Boot-Port des Python `agent-service`. API-Vertrag (Request/Response-JSON)
 ist identisch zum Python-Service. **TODO (Claude):** Klären und hier dokumentieren,
@@ -213,6 +215,7 @@ final geklärt wurde.
   vorgezogen, wenn eine mit vertretbarem Aufwand integrierbar ist.
 
 **Migration Java 21 → 25 / Spring Boot 3.4 → 4.1 (07/2026):**
+
 - Grund: Spring Boot 3.4 und 3.5 sind beide EOL (Stand 07/2026), daher direkter
   Sprung auf 4.1 (aktuell unterstützte Linie, Support bis 07/2027) statt Zwischenschritt
 - Lombok braucht seit JDK 25 einen expliziten `annotationProcessorPath` im
@@ -240,17 +243,16 @@ final geklärt wurde.
 - **`ElliottDegree.MINOR` und `MIN_CONFIDENCE = 0.6`** sind Erstschätzungen ohne
   umfassende Praxis-Kalibrierung (nur AMZN/CSCO + ein Dow-Jones-Lauf verifiziert).
 
-
-
-| Eigenschaft   | Wert                                              |
-| ------------- | ------------------------------------------------- |
-| Sprache       | Python 3.12                                       |
-| Framework     | FastAPI + sse-starlette                           |
-| Port (intern) | 8011 (erreichbar nur über VPN-Gateway-Alias)      |
-| Netzwerk      | `network_mode: "container:vpn"` – kein stock-net  |
-| TLS-Tarnung   | `curl_cffi` mit `impersonate="chrome"`            |
+| Eigenschaft   | Wert                                             |
+| ------------- | ------------------------------------------------ |
+| Sprache       | Python 3.12                                      |
+| Framework     | FastAPI + sse-starlette                          |
+| Port (intern) | 8011 (erreichbar nur über VPN-Gateway-Alias)     |
+| Netzwerk      | `network_mode: "container:vpn"` – kein stock-net |
+| TLS-Tarnung   | `curl_cffi` mit `impersonate="chrome"`           |
 
 **Anti-Blocking-Strategie:**
+
 - Läuft isoliert im Netzwerk-Namespace des `vpn`-Containers
 - Externe IP = anonyme Proton VPN IP (Niederlande)
 - `curl_cffi` imitiert Chrome-TLS-Fingerabdruck
@@ -268,6 +270,7 @@ final geklärt wurde.
 | Konfiguration | `twelvedata-service/.env` (API-Key) |
 
 **Wichtig – interval-Parameter:**
+
 - Ab v2.0.0 akzeptiert der Service einen optionalen `interval`-Parameter im Request
 - Default: `"1day"` (rückwärtskompatibel)
 - Für Stundendaten: `"1h"`
@@ -285,46 +288,47 @@ final geklärt wurde.
 
 ### 3.6 DB Access Service (`stock-data-db-access/`)
 
-| Eigenschaft  | Wert                              |
-| ------------ | --------------------------------- |
-| Sprache      | Java 25                           |
-| Framework    | Spring Boot 4.1                   |
-| Port         | 8013                              |
-| Datenbank    | MySQL 9.7                         |
-| Migrations   | Flyway (V1–V4)                    |
+| Eigenschaft | Wert            |
+| ----------- | --------------- |
+| Sprache     | Java 25         |
+| Framework   | Spring Boot 4.1 |
+| Port        | 8013            |
+| Datenbank   | MySQL 9.7       |
+| Migrations  | Flyway (V1–V4)  |
 
 **Datenbanktabellen:**
 
-| Tabelle         | Zweck                                          |
-| --------------- | ---------------------------------------------- |
-| `ticker_lists`  | Listen (DAX40, DOW30, INDIZES, INTERNATIONALE RTF'S) |
-| `ticker_symbols`| Einzelne Ticker pro Liste (raw_symbol)         |
-| `ticker_meta`   | Normalisierte API-Symbole + Stammdaten         |
-| `ohlcv_daily`   | Tageskerzen (5 Jahre, ~1.250 pro Ticker)       |
-| `ohlcv_hourly`  | Stundenkerzen (12 Monate, ~5.000 pro Ticker)   |
-| `fetch_log`     | Protokoll aller Datenabrufe                    |
+| Tabelle          | Zweck                                                |
+| ---------------- | ---------------------------------------------------- |
+| `ticker_lists`   | Listen (DAX40, DOW30, INDIZES, INTERNATIONALE RTF'S) |
+| `ticker_symbols` | Einzelne Ticker pro Liste (raw_symbol)               |
+| `ticker_meta`    | Normalisierte API-Symbole + Stammdaten               |
+| `ohlcv_daily`    | Tageskerzen (5 Jahre, ~1.250 pro Ticker)             |
+| `ohlcv_hourly`   | Stundenkerzen (12 Monate, ~5.000 pro Ticker)         |
+| `fetch_log`      | Protokoll aller Datenabrufe                          |
 
 **Wichtige Endpunkte (OHLCV):**
 
-| Method | Path                              | Beschreibung                     |
-| ------ | --------------------------------- | -------------------------------- |
-| GET    | `/api/ohlcv/meta`                 | Alle Ticker-Metadaten            |
-| GET    | `/api/ohlcv/daily/{ticker}/latest?n=90` | Neueste N Tageskerzen      |
-| POST   | `/api/ohlcv/daily/bulk`           | Bulk-Insert Tageskerzen          |
-| POST   | `/api/ohlcv/hourly/bulk`          | Bulk-Insert Stundenkerzen        |
-| POST   | `/api/ohlcv/fetch-log`            | Abruf-Protokoll schreiben        |
-| GET    | `/api/ohlcv/coverage`             | Datenbestand-Übersicht           |
+| Method | Path                                    | Beschreibung              |
+| ------ | --------------------------------------- | ------------------------- |
+| GET    | `/api/ohlcv/meta`                       | Alle Ticker-Metadaten     |
+| GET    | `/api/ohlcv/daily/{ticker}/latest?n=90` | Neueste N Tageskerzen     |
+| POST   | `/api/ohlcv/daily/bulk`                 | Bulk-Insert Tageskerzen   |
+| POST   | `/api/ohlcv/hourly/bulk`                | Bulk-Insert Stundenkerzen |
+| POST   | `/api/ohlcv/fetch-log`                  | Abruf-Protokoll schreiben |
+| GET    | `/api/ohlcv/coverage`                   | Datenbestand-Übersicht    |
 
 ### 3.7 History Fetcher (`history-fetcher/`)
 
-| Eigenschaft  | Wert                              |
-| ------------ | --------------------------------- |
-| Sprache      | Python 3.12                       |
-| Framework    | FastAPI + APScheduler             |
-| Port         | 8014                              |
-| Version      | 1.0.0 (fix: TwelveData interval)  |
+| Eigenschaft | Wert                             |
+| ----------- | -------------------------------- |
+| Sprache     | Python 3.12                      |
+| Framework   | FastAPI + APScheduler            |
+| Port        | 8014                             |
+| Version     | 1.0.0 (fix: TwelveData interval) |
 
 **Verhalten:**
+
 - Beim ersten Start: prüft ob Daten vorhanden → startet Erstbefüllung automatisch (AUTO_INITIAL_RUN=true)
 - Erstbefüllung: 5 Jahre Tagesdaten + Stundendaten für alle 4 Listen
 - Täglicher Update-Lauf: 20:00 Uhr (nur neue Kerzen seit letztem Abruf)
@@ -332,15 +336,16 @@ final geklärt wurde.
 
 **Endpunkte:**
 
-| Method | Path              | Beschreibung                         |
-| ------ | ----------------- | ------------------------------------ |
-| GET    | `/health`         | Status + Scheduler-Info              |
-| GET    | `/status`         | Letzter Lauf + nächster geplanter    |
-| POST   | `/fetch/initial`  | Erstbefüllung manuell starten        |
-| POST   | `/fetch/update`   | Update-Lauf manuell starten          |
-| GET    | `/coverage`       | Proxy → DB-Service Coverage          |
+| Method | Path             | Beschreibung                      |
+| ------ | ---------------- | --------------------------------- |
+| GET    | `/health`        | Status + Scheduler-Info           |
+| GET    | `/status`        | Letzter Lauf + nächster geplanter |
+| POST   | `/fetch/initial` | Erstbefüllung manuell starten     |
+| POST   | `/fetch/update`  | Update-Lauf manuell starten       |
+| GET    | `/coverage`      | Proxy → DB-Service Coverage       |
 
 **Kritische Konfiguration:**
+
 ```
 LIST_CODES = ["DAX40", "DOW30", "INDIZES", "INTERNATIONALE RTF'S"]
 twelvedata_delay_sec = 8.0   # nach JEDEM TwelveData-Request (Rate-Limit)
@@ -351,21 +356,23 @@ ticker_delay_sec     = 0.5   # zwischen Yahoo-Tickern
 
 ### 3.8 ML Service (`ml-service/`)
 
-| Eigenschaft  | Wert                              |
-| ------------ | --------------------------------- |
-| Sprache      | Python 3.12                       |
-| Framework    | FastAPI + APScheduler             |
-| Port         | 8015                              |
-| Modell       | XGBoost (xgb_reversal.joblib)     |
-| Features     | 38 technische Indikatoren         |
+| Eigenschaft | Wert                          |
+| ----------- | ----------------------------- |
+| Sprache     | Python 3.12                   |
+| Framework   | FastAPI + APScheduler         |
+| Port        | 8015                          |
+| Modell      | XGBoost (xgb_reversal.joblib) |
+| Features    | 38 technische Indikatoren     |
 
 **Was das Modell tut:**
+
 - Lernt aus 5 Jahren OHLCV-History aller Ticker
 - Label: Steigt der Kurs in den nächsten 5 Tagen um mehr als 3%? (ja=1 / nein=0)
 - Zeitreihen-Split 80/20 (kein zufälliges Shufflen → kein Data-Leakage)
 - Klassen-Gewichtung: Umkehrpunkte sind selten → pos_weight automatisch berechnet
 
 **Top-Features (aus Trainings-Ergebnis):**
+
 1. `vol_20d` – Volatilität 20 Tage (11.8%) – dominiert deutlich
 2. `vol_10d` – Volatilität 10 Tage (6.7%)
 3. `dist_52w_high` – Abstand 52-Wochen-Hoch (3.7%)
@@ -373,17 +380,21 @@ ticker_delay_sec     = 0.5   # zwischen Yahoo-Tickern
 5. `lower_wick` – Unterer Kerzendocht (2.7%)
 
 **Backtesting-Ergebnis (initiales Training):**
+
 - Precision: 0.384 | Recall: 0.367 | ROC-AUC: 0.698
 - ROC-AUC 0.698 = solides Signal (0.5 = Zufall, 1.0 = perfekt)
 
 **Konfiguration (Stellschrauben):**
+
 ```
 forecast_horizon       = 5     # Tage in die Zukunft
 reversal_threshold_pct = 3.0   # Mindest-Kursänderung % für "Umkehr"
 ```
+
 Nach Änderung: `curl -X POST http://localhost:8015/model/train`
 
 **Signal-Schwellen:**
+
 - 0–39%: kein Signal
 - 40–54%: schwach
 - 55–74%: mittel
@@ -391,13 +402,13 @@ Nach Änderung: `curl -X POST http://localhost:8015/model/train`
 
 **Endpunkte:**
 
-| Method | Path                   | Beschreibung                         |
-| ------ | ---------------------- | ------------------------------------ |
-| GET    | `/health`              | Status + model_ready                 |
-| GET    | `/model/status`        | Metriken + Feature-Importance        |
-| POST   | `/model/train`         | Training manuell starten             |
-| POST   | `/predict/{ticker}`    | Vorhersage für einen Ticker          |
-| POST   | `/predict/batch`       | Vorhersage für mehrere Ticker        |
+| Method | Path                | Beschreibung                  |
+| ------ | ------------------- | ----------------------------- |
+| GET    | `/health`           | Status + model_ready          |
+| GET    | `/model/status`     | Metriken + Feature-Importance |
+| POST   | `/model/train`      | Training manuell starten      |
+| POST   | `/predict/{ticker}` | Vorhersage für einen Ticker   |
+| POST   | `/predict/batch`    | Vorhersage für mehrere Ticker |
 
 **Modell-Persistenz:** Docker-Volume `ml_models:/app/models` – überlebt Container-Neustarts.
 **Retraining:** Automatisch jeden Sonntag 02:00 Uhr.
@@ -406,25 +417,27 @@ Nach Änderung: `curl -X POST http://localhost:8015/model/train`
 
 ## 4. Docker & Ports
 
-| Service            | Container               | Port  |
-| ------------------ | ----------------------- | ----- |
-| VPN Gateway        | `vpn`                   | 8011  |
-| Agent Service      | `stock_agent`           | 8010  |
-| Agent Service Java | `stock_agent_java`      | 8016  |
-| Yahoo Service      | `stock_yahoo`           | –     |
-| TwelveData Service | `stock_twelvedata`      | 8012  |
-| DB Access Service  | `stock_db_access`       | 8013  |
-| History Fetcher    | `stock_history_fetcher` | 8014  |
-| ML Service         | `stock_ml_service`      | 8015  |
-| MySQL              | `stock_data_db`         | 3306  |
-| Angular Client     | `stock_client`          | 4200  |
+| Service            | Container               | Port |
+| ------------------ | ----------------------- | ---- |
+| VPN Gateway        | `vpn`                   | 8011 |
+| Agent Service      | `stock_agent`           | 8010 |
+| Agent Service Java | `stock_agent_java`      | 8016 |
+| Yahoo Service      | `stock_yahoo`           | –    |
+| TwelveData Service | `stock_twelvedata`      | 8012 |
+| DB Access Service  | `stock_db_access`       | 8013 |
+| History Fetcher    | `stock_history_fetcher` | 8014 |
+| ML Service         | `stock_ml_service`      | 8015 |
+| MySQL              | `stock_data_db`         | 3306 |
+| Angular Client     | `stock_client`          | 4200 |
 
 **Vollständiger Start:**
+
 ```bash
 docker compose up -d --build
 ```
 
 **Einzelnen Service neu bauen:**
+
 ```bash
 docker compose up -d --build <service-name>
 # z.B.:
@@ -433,22 +446,25 @@ docker compose up -d --build ml-service
 ```
 
 **ML-Training nach Datenbankbefüllung:**
+
 ```bash
 curl -X POST http://localhost:8015/model/train
 curl http://localhost:8015/model/status
 ```
 
 **History-Fetcher manuell starten:**
+
 ```bash
 curl -X POST http://localhost:8014/fetch/initial
 docker logs -f stock_history_fetcher
 ```
 
 **Swagger Docs:**
-- Agent:      http://localhost:8010/docs
+
+- Agent: http://localhost:8010/docs
 - TwelveData: http://localhost:8012/docs
 - DB-Service: http://localhost:8013/swagger-ui.html
-- History:    http://localhost:8014/docs
+- History: http://localhost:8014/docs
 - ML-Service: http://localhost:8015/docs
 
 ---
@@ -542,8 +558,8 @@ Stufe 2 – Manuelle Qualitätsprüfung (nur bei Score 2/3 oder 3/3)
 
 Die Indikator-Dateien sind als **Umkehrsignal-Detektoren** konzipiert:
 
-| Datei                           | Erkennt diese Marktbedingung       | `trend_direction` in main.py |
-| ------------------------------- | ---------------------------------- | ---------------------------- |
+| Datei                           | Erkennt diese Marktbedingung      | `trend_direction` in main.py |
+| ------------------------------- | --------------------------------- | ---------------------------- |
 | `bullish_reversal_indicator.py` | Abwärtswelle + MACD<0 + Stoch<20  | `"bearish"`                  |
 | `bearish_reversal_indicator.py` | Aufwärtswelle + MACD>0 + Stoch>80 | `"bullish"`                  |
 
@@ -558,8 +574,8 @@ Python-Original – siehe Abschnitt 3.2b.
 
 ### ML-Signal Interpretation
 
-| Kombination                          | Bedeutung                                            |
-| ------------------------------------ | ---------------------------------------------------- |
-| `bearish` + ML-Signal stark (>75%)   | Abwärtstrend + KI sieht Umkehrchance → Fibonacci!   |
-| `bullish` + ML-Signal keins (<40%)   | Laufender Aufwärtstrend, keine Wende erwartet        |
-| `bullish` + ML-Signal mittel/stark   | Widerspruch → besonders genau prüfen                 |
+| Kombination                        | Bedeutung                                         |
+| ---------------------------------- | ------------------------------------------------- |
+| `bearish` + ML-Signal stark (>75%) | Abwärtstrend + KI sieht Umkehrchance → Fibonacci! |
+| `bullish` + ML-Signal keins (<40%) | Laufender Aufwärtstrend, keine Wende erwartet     |
+| `bullish` + ML-Signal mittel/stark | Widerspruch → besonders genau prüfen              |
