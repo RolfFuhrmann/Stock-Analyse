@@ -29,5 +29,7 @@ analysis:
 logging:
   level:
     rf.stock.agent: INFO
+    rf.stock.agent.indicator.BullishIndicator: DEBUG   # zeigt Peak/A/B/C bei erkanntem A-B-C
+    rf.stock.agent.indicator.BearishIndicator: DEBUG   # zeigt Peak/W0-W5 bei erkanntem 1-2-3-4-5
     org.springframework.web.reactive: WARN
 

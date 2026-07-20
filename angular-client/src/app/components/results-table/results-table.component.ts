@@ -6,7 +6,7 @@ import { MatTooltipModule } from '@angular/material/tooltip';
 import { MatIconModule } from '@angular/material/icon';
 import { StockResult } from '../../models/stock.models';
 
-type SortColumn = 'ticker' | 'name' | 'price' | 'trend' | 'elliott' | 'stochastic' | 'macd' | 'score' | 'candle' | 'ml';
+type SortColumn = 'ticker' | 'name' | 'price' | 'trend' | 'direction' | 'elliott' | 'stochastic' | 'macd' | 'score' | 'candle' | 'ml';
 type SortDir = 'asc' | 'desc' | null;
 
 /**
@@ -96,6 +96,21 @@ type SortDir = 'asc' | 'desc' | null;
           <td mat-cell *matCellDef="let row" class="col-center">
             @if (elliottWaveLabel(row); as label) {
               <span class="elliott-badge">{{ label }}</span>
+            }
+          </td>
+        </ng-container>
+
+        <!-- Richtung (MACD-Histogramm + Stochastik) -->
+        <ng-container matColumnDef="direction">
+          <th mat-header-cell *matHeaderCellDef class="col-center sortable-header" (click)="sortBy('direction')"
+              matTooltip="MACD-Histogramm gibt die Richtung vor · bei neutraler Stochastik (20–80) gilt das MACD-Vorzeichen · nur bei Divergenz (Stochastik im Extrembereich der Gegenrichtung) bleibt die Zelle leer">
+            Richtung <mat-icon class="sort-icon">{{ sortIcon('direction') }}</mat-icon>
+          </th>
+          <td mat-cell *matCellDef="let row" class="col-center">
+            @if (row.macd_stoch_direction === 'bullish') {
+              <span class="direction-bullish">▲ Bullish</span>
+            } @else if (row.macd_stoch_direction === 'bearish') {
+              <span class="direction-bearish">▼ Bearish</span>
             }
           </td>
         </ng-container>
@@ -297,6 +312,25 @@ type SortDir = 'asc' | 'desc' | null;
     .candle-s1 { background: #f3f4f6; color: #374151; border: 1px solid #e5e7eb; }
     .candle-none { color: #d1d5db; font-size: 13px; }
 
+    .direction-bullish {
+      display: inline-block;
+      padding: 3px 10px;
+      border-radius: 20px;
+      font-size: 12px;
+      font-weight: 600;
+      background: #dcfce7;
+      color: #166534;
+    }
+    .direction-bearish {
+      display: inline-block;
+      padding: 3px 10px;
+      border-radius: 20px;
+      font-size: 12px;
+      font-weight: 600;
+      background: #fee2e2;
+      color: #991b1b;
+    }
+
     .elliott-badge {
       display: inline-block;
       padding: 3px 10px;
@@ -370,7 +404,7 @@ export class ResultsTableComponent {
 
   readonly displayedColumns = [
     'ticker', 'name', 'interval', 'price', 'trend',
-    'elliott', 'stochastic', 'macd', 'score', 'candle', 'ml'
+    'elliott', 'direction', 'stochastic', 'macd', 'score', 'candle', 'ml'
   ];
 
   // ── Sortier-State ────────────────────────────────────────
@@ -396,6 +430,7 @@ export class ResultsTableComponent {
         case 'stochastic': return f * (Number(a.stochastic) - Number(b.stochastic));
         case 'macd':       return f * (Number(a.macd_histogram) - Number(b.macd_histogram));
         case 'score':      return f * (a.criteria_met - b.criteria_met);
+        case 'direction':  return f * ((a.macd_stoch_direction ?? '').localeCompare(b.macd_stoch_direction ?? ''));
         case 'candle':     return f * ((a.candle_strength ?? 0) - (b.candle_strength ?? 0));
         case 'ml':         return f * ((a.reversal_pct ?? -1) - (b.reversal_pct ?? -1));
         default:           return 0;

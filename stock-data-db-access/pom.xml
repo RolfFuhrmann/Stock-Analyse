@@ -7,7 +7,7 @@
     <parent>
         <groupId>org.springframework.boot</groupId>
         <artifactId>spring-boot-starter-parent</artifactId>
-        <version>3.4.5</version>
+        <version>4.1.0</version>
         <relativePath />
     </parent>
 
@@ -20,7 +20,7 @@
     <description>Stock Platform – DB Access Service für Listen-Verwaltung</description>
 
     <properties>
-        <java.version>21</java.version>
+        <java.version>25</java.version>
         <project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
     </properties>
 
@@ -63,6 +63,19 @@
             <optional>true</optional>
         </dependency>
 
+        <!-- Spring Boot 4 nutzt standardmäßig Jackson 3 (tools.jackson.*,
+             JsonMapper statt ObjectMapper). Unser Code (REST-Controller mit
+             ResponseEntity/DTOs) verlässt sich auf die klassische Jackson-
+             2-Auto-Konfiguration für die JSON-Serialisierung - dieses
+             offizielle Kompatibilitätsmodul stellt sie wieder bereit.
+             Stop-gap laut Spring-Boot-4.0-Migration-Guide, wird in einer
+             künftigen Version entfernt - echte Migration auf Jackson 3
+             separat planen. -->
+        <dependency>
+            <groupId>org.springframework.boot</groupId>
+            <artifactId>spring-boot-jackson2</artifactId>
+        </dependency>
+
         <!-- Tests -->
         <dependency>
             <groupId>org.springframework.boot</groupId>
@@ -83,6 +96,23 @@
                             <artifactId>lombok</artifactId>
                         </exclude>
                     </excludes>
+                </configuration>
+            </plugin>
+
+            <!-- Unter JDK 25 wird Lombok nicht mehr zuverlässig implizit über
+                 den Classpath als Annotation-Processor gefunden - deshalb
+                 hier explizit als annotationProcessorPath eingetragen. -->
+            <plugin>
+                <groupId>org.apache.maven.plugins</groupId>
+                <artifactId>maven-compiler-plugin</artifactId>
+                <configuration>
+                    <annotationProcessorPaths>
+                        <path>
+                            <groupId>org.projectlombok</groupId>
+                            <artifactId>lombok</artifactId>
+                            <version>${lombok.version}</version>
+                        </path>
+                    </annotationProcessorPaths>
                 </configuration>
             </plugin>
         </plugins>
