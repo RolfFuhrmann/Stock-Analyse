@@ -174,7 +174,73 @@ event: done
 data: {"message": "Analyse abgeschlossen"}
 ```
 
-### 3.3 Yahoo Service (`yahoo-service/`)
+### 3.2b Agent Service Java (`agent-service-java/`)
+
+| Eigenschaft  | Wert                                        |
+| ------------ | -------------------------------------------- |
+| Sprache      | Java 25                                     |
+| Framework    | Spring Boot 4.1 + WebFlux (reaktiv)         |
+| Port         | 8016                                        |
+| Container    | `stock_agent_java`                          |
+| Status       | **Produktiv über docker-compose** (Stand 07/2026) |
+
+Java/Spring-Boot-Port des Python `agent-service`. API-Vertrag (Request/Response-JSON)
+ist identisch zum Python-Service. **TODO (Claude):** Klären und hier dokumentieren,
+ob der Python-`agent-service` inzwischen abgeschaltet/entfernt wurde oder weiterhin
+parallel läuft – Stand dieser Doku ist unklar, da das im Rahmen der Session nicht
+final geklärt wurde.
+
+**Elliott-Wave-Erkennung läuft seit 07/2026 über [ta4j](https://github.com/ta4j/ta4j)**
+(`ElliottWaveFacade`), nicht mehr über eine handgestrickte Implementierung:
+
+- `BullishIndicator.detectElliottABC()` – erkennt abgeschlossene Abwärtskorrekturen
+  (Typ `CORRECTIVE_ZIGZAG`, Phase `CORRECTIVE_C`, Konfidenz ≥ `MIN_CONFIDENCE`)
+- `BearishIndicator.detectElliottImpulseUp()` – erkennt vollständige 5-Wellen-Impulse
+  aufwärts (Typ `IMPULSE`, Phase `WAVE5`, bullische Richtung, Konfidenz ≥ `MIN_CONFIDENCE`)
+- Beide nutzen dasselbe `ElliottWaveFacade.zigZag(series, DEGREE)`-Szenario pro Ticker
+  (aktuell `ElliottDegree.MINOR`, `MIN_CONFIDENCE = 0.6`) – **bewusst dieselbe
+  Berechnung wird aktuell zweimal pro Ticker durchgeführt** (einmal je Klasse),
+  das ist ein bekannter, noch nicht behobener Effizienz-Punkt, keine Korrektheitsfrage.
+- ta4j bewertet kontinuierlich über Confidence-Scoring (Fibonacci-Nähe, Zeit-
+  Proportionen, Alternation, Channel-Einhaltung, Struktur-Vollständigkeit) statt
+  über hartes Pass/Fail – das ersetzt eine mehrwöchige, mehrfach nachkalibrierte
+  Eigenentwicklung (Kaufman Efficiency Ratio, feste Fibonacci-Bänder, ZigZag-
+  Bestätigung), die als Referenz/Fallback im Code dokumentiert, aber nicht mehr
+  aktiv genutzt wird (siehe `BullishIndicator.detectUptrendPeakWithCorrection`,
+  pausiert zugunsten von ta4j).
+- **Grundsatzentscheidung:** Für gut erforschte, standardisierbare Probleme (wie
+  Elliott-Wave-Erkennung) wird eine ausgereifte Bibliothek einer Eigenentwicklung
+  vorgezogen, wenn eine mit vertretbarem Aufwand integrierbar ist.
+
+**Migration Java 21 → 25 / Spring Boot 3.4 → 4.1 (07/2026):**
+- Grund: Spring Boot 3.4 und 3.5 sind beide EOL (Stand 07/2026), daher direkter
+  Sprung auf 4.1 (aktuell unterstützte Linie, Support bis 07/2027) statt Zwischenschritt
+- Lombok braucht seit JDK 25 einen expliziten `annotationProcessorPath` im
+  `maven-compiler-plugin` (implizite Classpath-Erkennung reicht nicht mehr)
+- Spring Boot 4 nutzt standardmäßig Jackson 3 (`tools.jackson.*`) statt Jackson 2
+  (`com.fasterxml.jackson.*`) – `com.fasterxml.jackson.databind.ObjectMapper` wird
+  nicht mehr automatisch als Bean bereitgestellt. Fix: offizielles
+  Kompatibilitätsmodul `org.springframework.boot:spring-boot-jackson2` (Stop-Gap,
+  wird in künftiger Spring-Boot-Version entfernt – echte Migration auf Jackson 3
+  ist ein offener Punkt für später)
+- Docker-Images auf `eclipse-temurin:25-*-alpine` umgestellt,
+  `--enable-native-access=ALL-UNNAMED` im Entrypoint (JEP 472, JDK 24+ warnt sonst
+  bei Nettys nativer Bibliothek)
+- JDK 21 lokal (Mac, Homebrew-Cask `temurin@21`) und alle zugehörigen
+  `JAVA_HOME`-Referenzen vollständig entfernt
+
+### 3.2c Bekannte offene Punkte in agent-service-java
+
+- **Uptrend-Peak-Erkennung** (`BullishIndicator.detectUptrendPeakWithCorrection`):
+  strukturelle Alternative zur reinen Peak-Erkennung über das Fenster-Maximum,
+  implementiert aber pausiert zugunsten der ta4j-Migration. Nicht in `evaluate()`
+  verdrahtet.
+- **ta4j-Szenario wird doppelt berechnet** (einmal in `BullishIndicator`, einmal in
+  `BearishIndicator`) – Zusammenlegung möglich, aber noch nicht umgesetzt.
+- **`ElliottDegree.MINOR` und `MIN_CONFIDENCE = 0.6`** sind Erstschätzungen ohne
+  umfassende Praxis-Kalibrierung (nur AMZN/CSCO + ein Dow-Jones-Lauf verifiziert).
+
+
 
 | Eigenschaft   | Wert                                              |
 | ------------- | ------------------------------------------------- |
@@ -221,8 +287,8 @@ data: {"message": "Analyse abgeschlossen"}
 
 | Eigenschaft  | Wert                              |
 | ------------ | --------------------------------- |
-| Sprache      | Java 21                           |
-| Framework    | Spring Boot 3                     |
+| Sprache      | Java 25                           |
+| Framework    | Spring Boot 4.1                   |
 | Port         | 8013                              |
 | Datenbank    | MySQL 9.7                         |
 | Migrations   | Flyway (V1–V4)                    |
@@ -344,6 +410,7 @@ Nach Änderung: `curl -X POST http://localhost:8015/model/train`
 | ------------------ | ----------------------- | ----- |
 | VPN Gateway        | `vpn`                   | 8011  |
 | Agent Service      | `stock_agent`           | 8010  |
+| Agent Service Java | `stock_agent_java`      | 8016  |
 | Yahoo Service      | `stock_yahoo`           | –     |
 | TwelveData Service | `stock_twelvedata`      | 8012  |
 | DB Access Service  | `stock_db_access`       | 8013  |
@@ -412,9 +479,27 @@ docker logs -f stock_history_fetcher
 - [x] ML Service: XGBoost Umkehrwahrscheinlichkeit (ROC-AUC 0.698)
 - [x] Agent Service v4: ML-Signal in SSE-Stream integriert
 - [x] Angular Client: KI-Signal-Spalte (farbkodiert, sortierbar, PDF-Export)
+- [x] `agent-service-java`: Java/Spring-Boot-Port, produktiv über docker-compose
+- [x] `agent-service-java`: Elliott-Wave-Erkennung auf ta4j (`ElliottWaveFacade`)
+      umgestellt statt Eigenentwicklung (Confidence-Scoring statt Pass/Fail)
+- [x] `agent-service-java` + `stock-data-db-access`: Migration Java 21→25,
+      Spring Boot 3.4→4.1 (Jackson-2-Kompatibilitätsmodul, Lombok-Fix, JDK 21
+      lokal vollständig entfernt)
+- [ ] ta4j-Doppelberechnung (Bullish/Bearish) zusammenlegen
+- [ ] `ElliottDegree`/`MIN_CONFIDENCE` an mehr Praxisfällen kalibrieren
+- [ ] Klären: Python-`agent-service` (Port 8010) noch aktiv oder durch
+      `agent-service-java` ersetzt?
+- [ ] `stock-data-db-access`: README/Doku für Java-25-Stand ergänzt (diese Session)
 
-**Zuletzt geändert:** 2026-06-10
-**Zuletzt bearbeitet von Claude:** ML-Pipeline vollständig integriert. History-Fetcher (TwelveData interval-Fix + alle 4 Listen). ML-Service (XGBoost, 38 Features, wöchentliches Retraining). Agent Service v4.0.0 (ML-Signal via `_fetch_ml_signal()`). Angular Client (KI-Signal Spalte + PDF-Export). Dokumentation komplett aktualisiert.
+**Zuletzt geändert:** 2026-07-19
+**Zuletzt bearbeitet von Claude:** `agent-service-java` Elliott-Wave-Erkennung von
+handgestrickter ZigZag/Fibonacci/Efficiency-Ratio-Logik auf ta4j's `ElliottWaveFacade`
+umgestellt (beide Richtungen, A-B-C und 1-2-3-4-5), nach mehreren Kalibrierungsrunden
+an echten Praxisfällen (CSCO, AMZN, Dow-Jones-Lauf). Anschließend `agent-service-java`
+und `stock-data-db-access` von Java 21/Spring Boot 3.4 auf Java 25/Spring Boot 4.1
+migriert (Lombok-Annotation-Processor-Fix, Jackson-2-Kompatibilitätsmodul, Docker-
+Images auf JDK 25, JDK 21 lokal entfernt). Dokumentation (`CLAUDE.md`, `README.md`)
+entsprechend aktualisiert.
 
 ---
 
@@ -430,6 +515,8 @@ docker logs -f stock_history_fetcher
 - **Plattform** – `--platform=linux/arm64` in allen Dockerfiles (Apple Silicon). Bei x86-Änderungen immer erwähnen.
 - **TwelveData interval** – immer `interval="1day"` für Tagesdaten und `interval="1h"` für Stundendaten übergeben. Ohne diesen Parameter liefert TwelveData Intraday-Daten.
 - **ML-Signal ist non-blocking** – Timeout 5s. Bei ML-Service-Ausfall läuft die Analyse normal weiter (`ml_available: false`).
+- **Java-Services (`agent-service-java`, `stock-data-db-access`)** laufen seit 07/2026 auf **Java 25 + Spring Boot 4.1**. JDK 21 ist lokal nicht mehr installiert – bei neuen Java-Services/Dependencies immer von Java 25 als Baseline ausgehen.
+- **Bibliothek vor Eigenentwicklung:** Für gut erforschte, standardisierbare Probleme (z.B. Elliott-Wave-Erkennung) erst prüfen, ob eine ausgereifte Bibliothek existiert (siehe ta4j-Entscheidung, Abschnitt 3.2b), bevor eine Eigenentwicklung vertieft wird.
 - Bei Unklarheiten zuerst fragen, dann implementieren
 
 ---
@@ -461,6 +548,13 @@ Die Indikator-Dateien sind als **Umkehrsignal-Detektoren** konzipiert:
 | `bearish_reversal_indicator.py` | Aufwärtswelle + MACD>0 + Stoch>80 | `"bullish"`                  |
 
 **Regel:** `trend_direction` zeigt den **aktuellen Markttrend**, nicht die erwartete Umkehrrichtung. Diese Invertierung ist in `main.py` (`analyse_quote`) explizit kommentiert und darf **nicht** geändert werden.
+
+**In `agent-service-java` gilt dieselbe Semantik**, nur mechanisch anders umgesetzt:
+`BullishIndicator` (→ `trend_direction: "bearish"`) erkennt über ta4j eine
+abgeschlossene Abwärtskorrektur (Phase `CORRECTIVE_C`); `BearishIndicator`
+(→ `trend_direction: "bullish"`) erkennt einen vollständigen 5-Wellen-Aufwärtsimpuls
+(Phase `WAVE5`). Die Datei-Namen bleiben bewusst semantisch invertiert, wie im
+Python-Original – siehe Abschnitt 3.2b.
 
 ### ML-Signal Interpretation
 

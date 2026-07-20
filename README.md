@@ -138,6 +138,7 @@ docker logs vpn
 | Service            | Port | Description                                         |
 | ------------------ | ---- | --------------------------------------------------- |
 | Agent Service      | 8010 | AI agent · SSE proxy · Elliott/MACD/Stochastic · ML |
+| Agent Service Java | 8016 | Java/Spring Boot port of Agent Service (same API contract, ta4j-based Elliott Wave detection) |
 | VPN Gateway        | 8011 | Gluetun VPN · Forwards port 8011 to Yahoo           |
 | Yahoo Service      | –    | Yahoo Finance · Runs inside VPN network             |
 | TwelveData Service | 8012 | Twelve Data API · SSE · 8s delay per ticker (Free)  |
@@ -149,6 +150,7 @@ docker logs vpn
 ### Swagger Docs
 
 - Agent: http://localhost:8010/docs
+- Agent (Java): http://localhost:8016/actuator (Spring Boot Actuator, no Swagger UI configured yet)
 - Yahoo: http://localhost:8011/docs (via VPN gateway)
 - TwelveData: http://localhost:8012/docs
 - DB Access: http://localhost:8013/swagger-ui.html
@@ -170,7 +172,7 @@ or load predefined lists.
 
 ## DB Access Service
 
-The `stock-data-db-access` service is a **Spring Boot 3 / Java 21** microservice that manages ticker lists and historical price data in a MySQL 9.7 database. It is the single source of truth for all ticker symbols and OHLCV data.
+The `stock-data-db-access` service is a **Spring Boot 4.1 / Java 25** microservice that manages ticker lists and historical price data in a MySQL 9.7 database. It is the single source of truth for all ticker symbols and OHLCV data.
 
 ### Database Schema (Flyway V1–V4)
 
@@ -214,7 +216,7 @@ docker push <dockerhub-user>/stock-data-db-access:latest
 ```bash
 DOCKER_USER=<dockerhub-user>
 
-for SERVICE in agent-service yahoo-service twelvedata-service angular-client \
+for SERVICE in agent-service agent-service-java yahoo-service twelvedata-service angular-client \
                stock-data-db-access history-fetcher ml-service; do
   docker build --platform linux/arm64 -t $DOCKER_USER/$SERVICE:latest ./$SERVICE
   docker push $DOCKER_USER/$SERVICE:latest
@@ -238,6 +240,16 @@ agent-service/
   bearish_reversal_indicator.py # Elliott + MACD + Stochastic (bearish)
   candle_patterns.py            # 5 candlestick patterns
   Dockerfile / requirements.txt
+
+agent-service-java/
+  src/main/java/rf/stock/agent/
+    indicator/                  # BullishIndicator / BearishIndicator (ta4j-based
+                                 # Elliott Wave via ElliottWaveFacade, MACD, Stochastic)
+    candle/                     # Candlestick pattern detection
+    service/                    # AnalysisService, DataServiceClient
+    controller/                 # AgentController (SSE proxy)
+    model/                      # OhlcvBar, IndicatorResult, StockResult, ...
+  Dockerfile / pom.xml          # Java 25, Spring Boot 4.1
 
 yahoo-service/
   main.py                       # Yahoo Finance + SSE + curl_cffi
