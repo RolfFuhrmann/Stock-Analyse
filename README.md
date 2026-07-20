@@ -135,17 +135,17 @@ docker logs vpn
 
 ## Services & Ports
 
-| Service            | Port | Description                                         |
-| ------------------ | ---- | --------------------------------------------------- |
-| Agent Service      | 8010 | AI agent · SSE proxy · Elliott/MACD/Stochastic · ML |
+| Service            | Port | Description                                                                                   |
+| ------------------ | ---- | --------------------------------------------------------------------------------------------- |
+| Agent Service      | 8010 | AI agent · SSE proxy · Elliott/MACD/Stochastic · ML                                           |
 | Agent Service Java | 8016 | Java/Spring Boot port of Agent Service (same API contract, ta4j-based Elliott Wave detection) |
-| VPN Gateway        | 8011 | Gluetun VPN · Forwards port 8011 to Yahoo           |
-| Yahoo Service      | –    | Yahoo Finance · Runs inside VPN network             |
-| TwelveData Service | 8012 | Twelve Data API · SSE · 8s delay per ticker (Free)  |
-| DB Access Service  | 8013 | MySQL · Ticker lists · OHLCV data · REST API        |
-| History Fetcher    | 8014 | Historical data population · Daily updates          |
-| ML Service         | 8015 | XGBoost · Reversal probability · Weekly retraining  |
-| Angular Client     | 4200 | Web UI · Real‑time results · AI signal column       |
+| VPN Gateway        | 8011 | Gluetun VPN · Forwards port 8011 to Yahoo                                                     |
+| Yahoo Service      | –    | Yahoo Finance · Runs inside VPN network                                                       |
+| TwelveData Service | 8012 | Twelve Data API · SSE · 8s delay per ticker (Free)                                            |
+| DB Access Service  | 8013 | MySQL · Ticker lists · OHLCV data · REST API                                                  |
+| History Fetcher    | 8014 | Historical data population · Daily updates                                                    |
+| ML Service         | 8015 | XGBoost · Reversal probability · Weekly retraining                                            |
+| Angular Client     | 4200 | Web UI · Real‑time results · AI signal column                                                 |
 
 ### Swagger Docs
 
