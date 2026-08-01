@@ -1,0 +1,3 @@
+[submodule "agent-service-java/ta4j"]
+	path = agent-service-java/ta4j
+	url = https://github.com/ta4j/ta4j.git
