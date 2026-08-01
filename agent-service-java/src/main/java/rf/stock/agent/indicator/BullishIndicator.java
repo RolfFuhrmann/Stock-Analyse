@@ -7,9 +7,11 @@ import java.util.Optional;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.ta4j.core.BarSeries;
+import org.ta4j.core.indicators.elliott.ElliottAnalysisResult;
+import org.ta4j.core.indicators.elliott.ElliottDegree;
 import org.ta4j.core.indicators.elliott.ElliottPhase;
 import org.ta4j.core.indicators.elliott.ElliottScenario;
-import org.ta4j.core.indicators.elliott.ElliottWaveFacade;
+import org.ta4j.core.indicators.elliott.ElliottScenarioSet;
 
 import rf.stock.agent.candle.BullishCandlePatterns;
 import rf.stock.agent.model.CandlePatternResult;
@@ -50,15 +52,15 @@ public class BullishIndicator {
 
         double[] closes = bars.stream().mapToDouble(OhlcvBar::close).toArray();
 
-        boolean elliottOk = detectElliottABC(bars, lookback);
+        BearishIndicator.ElliottCheckResult elliott = checkElliottABC(bars, lookback);
         boolean macdOk = calcMacdIsNegative(closes);
         boolean stochOk = calcStochIsOversold(bars);
 
         CandlePatternResult candle = BullishCandlePatterns.detect(bars);
 
-        int criteriaMet = (elliottOk ? 1 : 0) + (macdOk ? 1 : 0) + (stochOk ? 1 : 0);
+        int criteriaMet = (elliott.genuine() ? 1 : 0) + (macdOk ? 1 : 0) + (stochOk ? 1 : 0);
 
-        return new IndicatorResult(elliottOk, macdOk, stochOk, criteriaMet, candle);
+        return new IndicatorResult(elliott.genuine(), elliott.stage(), macdOk, stochOk, criteriaMet, candle);
     }
 
     // ── MACD ─────────────────────────────────────────────────────────────────
@@ -119,62 +121,59 @@ public class BullishIndicator {
      */
     static final double MIN_SWING_PCT = 1.5;
 
-    /**
-     * Erkennt eine abgeschlossene abwärtsgerichtete Elliott-Korrektur A-B-C
-     * über ta4j's ElliottWaveFacade. Ersetzt die frühere handgestrickte
-     * Logik (eigene ZigZag-Bestätigung, feste Fibonacci-Bänder, hand-
-     * kalibrierte Kaufman-Efficiency-Ratio-Schwelle) durch dasselbe
-     * szenario-basierte Modell mit Confidence-Scoring, das bereits für
-     * BearishIndicator.detectElliottImpulseUp() genutzt wird (siehe dort
-     * für Details zu Degree/Konfidenz-Kalibrierung).
-     *
-     * Ein Treffer erfordert:
-     * - Ein Basis-Szenario (höchste Konfidenz) existiert für den
-     * aktuellen Balken.
-     * - Der Szenario-Typ ist korrektiv (CORRECTIVE, nicht impulsiv).
-     * - Die aktuelle Phase ist CORRECTIVE_C (die A-B-C-Struktur ist
-     * vollständig, nicht nur "in Bildung").
-     * - Die Konfidenz liegt über MIN_CONFIDENCE.
-     *
-     * UNSICHERHEIT (noch nicht an echten Daten verifiziert): anders als
-     * beim Impuls (detectElliottImpulseUp, wo isBullish() klar die
-     * Richtung von Welle 1 beschreibt) ist die genaue Bedeutung von
-     * isBullish()/isBearish() bei einem korrektiven Szenario nicht
-     * zweifelsfrei geklärt. Bewusst NICHT auf Richtung gefiltert - das
-     * Log unten zeigt Typ/Phase/Richtung, damit sich das anhand echter
-     * Fälle nachkalibrieren lässt, falls nötig.
-     */
     static boolean detectElliottABC(List<OhlcvBar> bars, int lookback) {
+        return checkElliottABC(bars, lookback).genuine();
+    }
+
+    static BearishIndicator.ElliottCheckResult checkElliottABC(List<OhlcvBar> bars, int lookback) {
         int start = Math.max(0, bars.size() - lookback);
         List<OhlcvBar> data = bars.subList(start, bars.size());
         if (data.size() < 20) {
-            return false;
+            return BearishIndicator.ElliottCheckResult.NONE;
         }
 
         BarSeries series = BearishIndicator.toBarSeries(data);
-        int index = series.getEndIndex();
-
-        ElliottWaveFacade facade = ElliottWaveFacade.zigZag(series, BearishIndicator.DEGREE);
-        Optional<ElliottScenario> baseCase = facade.primaryScenario(index);
-        if (baseCase.isEmpty()) {
-            return false;
+        ElliottDegree degree = BearishIndicator.selectDegree(data.size());
+        Optional<ElliottAnalysisResult> analysisOpt = BearishIndicator.analyze(series, degree);
+        if (analysisOpt.isEmpty()) {
+            if (log.isDebugEnabled()) {
+                log.debug("ta4j Elliott A-B-C Check: Degree={} keine Analyse für diesen Degree verfügbar", degree);
+            }
+            return BearishIndicator.ElliottCheckResult.NONE;
         }
 
-        ElliottScenario scenario = baseCase.get();
-        boolean genuine = scenario.type().isCorrective()
+        ElliottAnalysisResult analysis = analysisOpt.get();
+        int index = analysis.index();
+        ElliottScenarioSet scenarioSet = analysis.scenarios();
+
+        Optional<ElliottScenario> selected = BearishIndicator.selectScenario(scenarioSet,
+                scenario -> scenario.type().isCorrective());
+        if (selected.isEmpty()) {
+            if (log.isDebugEnabled()) {
+                log.debug("ta4j Elliott A-B-C Check: Degree={} kein passendes Szenario gefunden [barIndex={}]",
+                        degree, index);
+            }
+            return BearishIndicator.ElliottCheckResult.NONE;
+        }
+
+        ElliottScenario scenario = selected.get();
+        boolean genuine = scenario.hasKnownDirection()
+                && scenario.isBearish()
                 && scenario.currentPhase() == ElliottPhase.CORRECTIVE_C
                 && scenario.confidence().isAboveThreshold(BearishIndicator.MIN_CONFIDENCE);
+        String stage = BearishIndicator.describeStage(scenario);
 
         if (log.isDebugEnabled()) {
-            log.debug("ta4j Elliott A-B-C Check: Phase={} Typ={} Richtung={} Konfidenz={}% "
-                    + "Invalidierung={} Ziel={} Wellenanzahl={} [barIndex={}] -> {}",
-                    scenario.currentPhase(), scenario.type(), scenario.isBullish() ? "bullish" : "bearish",
+            log.debug("ta4j Elliott A-B-C Check: Degree={} Phase={} Typ={} Richtung={} Konfidenz={}% "
+                    + "Invalidierung={} Ziel={} Wellenanzahl={} Wellen=[{}] [barIndex={}] -> {}",
+                    degree, scenario.currentPhase(), scenario.type(), scenario.isBullish() ? "bullish" : "bearish",
                     Math.round(scenario.confidence().asPercentage() * 10) / 10.0,
-                    scenario.invalidationPrice(), scenario.primaryTarget(), scenario.waveCount(), index,
+                    scenario.invalidationPrice(), scenario.primaryTarget(), scenario.waveCount(),
+                    BearishIndicator.describeSwings(data, scenario), index,
                     genuine ? "OK" : "kein Treffer");
         }
 
-        return genuine;
+        return new BearishIndicator.ElliottCheckResult(genuine, stage);
     }
 
     static double round(double v) {
@@ -248,11 +247,11 @@ public class BullishIndicator {
 
     // ── UPTREND-PEAK MIT KORREKTUR (STRUKTURELLE HÖHERE HOCHS/TIEFS) ──────────
     // PAUSIERT (07/2026): Rolf hat entschieden, stattdessen auf Java 25 +
-    // ta4j umzusteigen (ElliottWaveFacade/ElliottScenarioIndicator lösen
-    // genau dieses Problem bereits über Multi-Degree-Analyse und
-    // kontinuierliches Confidence-Scoring statt hartem Pass/Fail). Code
-    // bleibt als Referenz/Fallback stehen, ist aber NICHT in evaluate()
-    // verdrahtet.
+    // ta4j umzusteigen (seit 31.07. via ElliottWaveAnalysisRunner statt der
+    // reinen ElliottWaveFacade - löst genau dieses Problem bereits über
+    // Multi-Degree-Analyse und kontinuierliches Confidence-Scoring statt
+    // hartem Pass/Fail). Code bleibt als Referenz/Fallback stehen, ist aber
+    // NICHT in evaluate() verdrahtet.
 
     // Mindestanzahl aufeinanderfolgender Anstiege (Hochs oder Tiefs), damit
     // ein Uptrend als strukturell belastbar gilt (klassische Dow-Theorie:

@@ -65,6 +65,7 @@ export class PdfExportService {
     .badge-true  { background: #dcfce7; color: #166534; }
     .badge-false { background: #f3f4f6; color: #6b7280; }
     .badge-bearish { background: #fee2e2; color: #991b1b; }
+    .badge-progress { background: #f3f4f6; color: #6b7280; font-weight: 500; }
     .score-3 { background: #dcfce7; color: #166534; }
     .score-2 { background: #fef9c3; color: #854d0e; }
     .score-1, .score-0 { background: #f3f4f6; color: #9ca3af; }
@@ -137,11 +138,13 @@ export class PdfExportService {
       : '–';
     const badge    = (v: boolean) =>
       `<span class="badge ${v ? 'badge-true' : 'badge-false'}">${v ? 'True' : 'False'}</span>`;
-    const elliottLabel = r.elliott_wave
-      ? (r.trend_direction === 'bearish' ? 'A-B-C' : r.trend_direction === 'bullish' ? '1-2-3-4-5' : '')
-      : '';
+    const elliottLabel = r.elliott_wave_stage
+      ? r.elliott_wave_stage
+      : r.elliott_wave
+        ? (r.trend_direction === 'bearish' ? 'A-B-C' : r.trend_direction === 'bullish' ? '1-2-3-4-5' : '')
+        : '';
     const elliott  = elliottLabel
-      ? `<span class="badge badge-true">${elliottLabel}</span>`
+      ? `<span class="badge ${r.elliott_wave ? 'badge-true' : 'badge-progress'}">${elliottLabel}</span>`
       : '–';
     const direction = r.macd_stoch_direction === 'bullish'
       ? `<span class="badge badge-true">▲ Bullish</span>`

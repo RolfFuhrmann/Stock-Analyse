@@ -171,6 +171,7 @@ public class AnalysisService {
                 .trendDirection(result.trendDirection())
                 .macdStochDirection(result.macdStochDirection())
                 .elliottWave(result.elliottWave())
+                .elliottWaveStage(result.elliottWaveStage())
                 .stochastic(result.stochastic())
                 .macdHistogram(result.macdHistogram())
                 .criteriaMet(result.criteriaMet())
@@ -257,8 +258,8 @@ public class AnalysisService {
             double startPrice = bars.get(startIdx).close();
             double trendPct = round2((price - startPrice) / startPrice * 100);
 
-            log.info("  {}: Elliott={} Stoch={} MACD={} [{}/3] dir={}",
-                    ticker, result.elliottOk(), result.stochOk(), result.macdOk(),
+            log.info("  {}: Elliott={} ({}) Stoch={} MACD={} [{}/3] dir={}",
+                    ticker, result.elliottOk(), result.elliottStage(), result.stochOk(), result.macdOk(),
                     result.criteriaMet(), trendDirection);
 
             return StockResult.builder()
@@ -270,6 +271,7 @@ public class AnalysisService {
                     .trendDirection(trendDirection)
                     .macdStochDirection(macdStochDirection)
                     .elliottWave(result.elliottOk())
+                    .elliottWaveStage(result.elliottStage())
                     .stochastic(result.stochOk())
                     .macdHistogram(result.macdOk())
                     .criteriaMet(result.criteriaMet())

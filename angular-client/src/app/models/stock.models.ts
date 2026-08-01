@@ -32,6 +32,13 @@ export interface StockResult {
    */
   macd_stoch_direction: 'bullish' | 'bearish' | null;
   elliott_wave: boolean;
+  /**
+   * Menschenlesbarer Zwischenstand der aktuellen ta4j-Wellenanalyse
+   * (z.B. "A-B abgeschlossen, C im Entstehen"), unabhängig davon ob
+   * elliott_wave true/false ist. Leerstring, wenn kein Szenario gefunden
+   * wurde (z.B. zu wenig Datenpunkte).
+   */
+  elliott_wave_stage: string;
   stochastic: boolean;
   macd_histogram: boolean;
   criteria_met: number;

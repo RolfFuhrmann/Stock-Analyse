@@ -37,6 +37,16 @@ public record StockResult(
     @JsonProperty("macd_stoch_direction") String macdStochDirection,
 
     @JsonProperty("elliott_wave")    boolean elliottWave,
+
+    /**
+     * Menschenlesbare Beschreibung des aktuellen ta4j-Wellen-Zwischenstands
+     * (z.B. "A-B abgeschlossen, C im Entstehen"), unabhängig davon, ob
+     * elliott_wave true/false ist. Zeigt auch Muster, die (noch) nicht die
+     * Konfidenz-/Vollständigkeits-Schwelle für elliott_wave=true erreichen.
+     * Leerstring, falls ta4j gar kein Szenario findet (z.B. zu wenig Daten).
+     */
+    @JsonProperty("elliott_wave_stage") String elliottWaveStage,
+
     @JsonProperty("stochastic")      boolean stochastic,
     @JsonProperty("macd_histogram")  boolean macdHistogram,
     @JsonProperty("criteria_met")    int criteriaMet,
@@ -63,6 +73,7 @@ public record StockResult(
             .name(name)
             .interval(interval)
             .elliottWave(false)
+            .elliottWaveStage("")
             .stochastic(false)
             .macdHistogram(false)
             .criteriaMet(0)
