@@ -47,8 +47,8 @@ type SortDir = 'asc' | 'desc' | null;
           <th mat-header-cell *matHeaderCellDef class="col-left sortable-header" (click)="sortBy('name')">
             Name <mat-icon class="sort-icon">{{ sortIcon('name') }}</mat-icon>
           </th>
-          <td mat-cell *matCellDef="let row" class="col-name">
-            {{ row.name ?? '–' }}
+          <td mat-cell *matCellDef="let row" class="col-name" [matTooltip]="row.name ? '' : 'Kein Name vom Datenanbieter geliefert – zeige Ticker'">
+            {{ row.name ?? row.ticker }}
           </td>
         </ng-container>
 
@@ -95,7 +95,8 @@ type SortDir = 'asc' | 'desc' | null;
           </th>
           <td mat-cell *matCellDef="let row" class="col-center">
             @if (elliottWaveLabel(row); as label) {
-              <span class="elliott-badge">{{ label }}</span>
+              <span [class]="elliottWaveBadgeClass(row)"
+                    [matTooltip]="row.elliott_wave ? 'Muster vollständig erkannt (Konfidenz ausreichend)' : 'Zwischenstand – Muster (noch) nicht sicher/vollständig genug'">{{ label }}</span>
             }
           </td>
         </ng-container>
@@ -338,9 +339,18 @@ type SortDir = 'asc' | 'desc' | null;
       font-size: 12px;
       font-weight: 600;
       font-family: 'SF Mono', Monaco, monospace;
+    }
+    .elliott-confirmed {
       background: #eff6ff;
       color: #1d4ed8;
       border: 1px solid #bfdbfe;
+    }
+    .elliott-progress {
+      background: #f3f4f6;
+      color: #6b7280;
+      border: 1px solid #e5e7eb;
+      font-weight: 500;
+      font-size: 11px;
     }
 
     .col-name {
@@ -466,13 +476,17 @@ export class ResultsTableComponent {
   }
 
   /**
-   * Text für die erkannte Elliott-Welle.
-   * trend_direction === 'bearish' → Bull-Indikator hat gewonnen → Abwärtswelle A-B-C.
-   * trend_direction === 'bullish' → Bear-Indikator hat gewonnen → Aufwärtswelle 1-2-3-4-5.
-   * (Semantik-Invertierung ist Absicht, siehe AnalysisService.)
-   * Ohne eindeutige Welle wird ein leerer String zurückgegeben → keine Anzeige.
+   * Text für die Elliott-Wave-Spalte.
+   * Bevorzugt den neuen, von ta4j gelieferten Zwischenstand (elliott_wave_stage,
+   * z.B. "A-B abgeschlossen, C im Entstehen") - zeigt so auch unvollständige/
+   * unsichere Muster, nicht nur vollständig bestätigte.
+   * Fallback auf die alte grobe A-B-C / 1-2-3-4-5-Anzeige, falls das Backend
+   * (noch) kein elliott_wave_stage liefert.
    */
   elliottWaveLabel(row: StockResult): string {
+    if (row.elliott_wave_stage) {
+      return row.elliott_wave_stage;
+    }
     if (!row.elliott_wave) {
       return '';
     }
@@ -483,6 +497,11 @@ export class ResultsTableComponent {
       return '1-2-3-4-5';
     }
     return '';
+  }
+
+  /** Badge-Klasse: kräftig/blau bei bestätigtem Muster, gedeckt/grau bei bloßem Zwischenstand. */
+  elliottWaveBadgeClass(row: StockResult): string {
+    return row.elliott_wave ? 'elliott-badge elliott-confirmed' : 'elliott-badge elliott-progress';
   }
 
   mlSignalLabel(signal: string): string {

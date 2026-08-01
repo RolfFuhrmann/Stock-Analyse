@@ -40,7 +40,8 @@ class BearishIndicatorTest {
         // crasht - unabhängig davon, ob ein Szenario erkannt wird oder nicht.
         List<OhlcvBar> bars = flat(
                 100, 103, 106, 109, 112, 115, 113, 111, 114, 118, 122, 126, 130,
-                134, 138, 134, 131, 133, 137, 141, 145, 143, 140, 138, 142);
+                134, 138, 134, 131, 133, 137, 141, 145, 143, 140, 138, 142
+        );
 
         assertDoesNotThrow(() -> BearishIndicator.detectElliottImpulseUp(bars, bars.size()));
     }

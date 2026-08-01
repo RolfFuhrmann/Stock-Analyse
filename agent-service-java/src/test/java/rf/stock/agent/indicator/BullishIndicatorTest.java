@@ -47,7 +47,8 @@ class BullishIndicatorTest {
                 100, 102, 104, 106, 108, 110, 112, 114, 116, 118,
                 120, 118, 115, 112, 108, 104, 100,
                 103, 106, 109,
-                107, 103, 93);
+                107, 103, 93
+        );
 
         assertDoesNotThrow(() -> BullishIndicator.detectElliottABC(bars, bars.size()));
     }

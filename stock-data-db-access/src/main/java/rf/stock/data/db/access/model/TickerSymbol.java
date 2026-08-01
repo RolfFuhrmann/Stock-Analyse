@@ -2,7 +2,6 @@ package rf.stock.data.db.access.model;
 
 import jakarta.persistence.*;
 import lombok.*;
-import rf.stock.data.db.access.busines.Exchange;
 
 import java.time.LocalDateTime;
 

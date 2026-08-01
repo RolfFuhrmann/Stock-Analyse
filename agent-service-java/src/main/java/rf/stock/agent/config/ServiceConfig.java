@@ -1,9 +1,6 @@
 package rf.stock.agent.config;
 
 import org.springframework.boot.context.properties.ConfigurationProperties;
-import org.springframework.boot.context.properties.bind.DefaultValue;
-
-import java.util.Map;
 
 /**
  * Zentrale Konfiguration des Agent Service.
@@ -11,8 +8,8 @@ import java.util.Map;
  */
 @ConfigurationProperties(prefix = "services")
 public record ServiceConfig(
-    String yahooUrl,
-    String twelvedataUrl,
-    String mlUrl,
-    String dbUrl
-) {}
+        String yahooUrl,
+        String twelvedataUrl,
+        String mlUrl,
+        String dbUrl) {
+}

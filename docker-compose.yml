@@ -64,11 +64,13 @@ services:
     restart: unless-stopped
     ports:
       - "8016:8016"
+      - "5005:5005"
     environment:
       - YAHOO_SERVICE_URL=http://yahoo-service:8011
       - TWELVEDATA_SERVICE_URL=http://twelvedata-service:8012
       - DB_SERVICE_URL=http://db-service:8013
       - ML_SERVICE_URL=http://ml-service:8015
+      - JAVA_TOOL_OPTIONS=-agentlib:jdwp=transport=dt_socket,server=y,suspend=n,address=*:5005
     depends_on:
       - vpn
       - twelvedata-service

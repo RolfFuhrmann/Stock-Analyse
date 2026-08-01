@@ -6,17 +6,24 @@ import java.time.LocalDate;
 import java.time.LocalDateTime;
 import java.time.ZoneOffset;
 import java.time.format.DateTimeParseException;
+import java.util.Comparator;
 import java.util.List;
 import java.util.Optional;
+import java.util.function.Predicate;
 
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.ta4j.core.BarSeries;
 import org.ta4j.core.BaseBarSeriesBuilder;
+import org.ta4j.core.indicators.elliott.ElliottAnalysisResult;
 import org.ta4j.core.indicators.elliott.ElliottDegree;
+import org.ta4j.core.indicators.elliott.ElliottLogicProfile;
 import org.ta4j.core.indicators.elliott.ElliottPhase;
 import org.ta4j.core.indicators.elliott.ElliottScenario;
-import org.ta4j.core.indicators.elliott.ElliottWaveFacade;
+import org.ta4j.core.indicators.elliott.ElliottScenarioSet;
+import org.ta4j.core.indicators.elliott.ElliottSwing;
+import org.ta4j.core.indicators.elliott.ElliottWaveAnalysisResult;
+import org.ta4j.core.indicators.elliott.ElliottWaveAnalysisRunner;
 
 import rf.stock.agent.candle.BearishCandlePatterns;
 import rf.stock.agent.model.CandlePatternResult;
@@ -25,11 +32,9 @@ import rf.stock.agent.model.OhlcvBar;
 
 /**
  * Bearische Trendumkehr-Indikatoren.
- * Portiert aus bearish_reversal_indicator.py.
- *
  * Erkennt: Aufwärtswelle (Elliott 1-2-3-4-5) + MACD > 0 + Stochastik > 80
- * → trend_direction in main.py wird auf "bullish" gesetzt
- * (Semantik-Invertierung, wie Python)
+ * → trend_direction wird auf "bullish" gesetzt (Semantik-Invertierung, wie
+ * Python).
  */
 public class BearishIndicator {
 
@@ -41,29 +46,25 @@ public class BearishIndicator {
     private static final int STOCH_K = 14;
     private static final int STOCH_D = 3;
 
-    /**
-     * Führt alle bearischen Indikatoren aus.
-     */
     public static IndicatorResult evaluate(List<OhlcvBar> bars, int lookback) {
         if (bars == null || bars.size() < 30)
             return IndicatorResult.empty();
 
         double[] closes = bars.stream().mapToDouble(OhlcvBar::close).toArray();
 
-        boolean elliottOk = detectElliottImpulseUp(bars, lookback);
+        ElliottCheckResult elliott = checkElliottImpulseUp(bars, lookback);
         boolean macdOk = calcMacdIsPositive(closes);
         boolean stochOk = calcStochIsOverbought(bars);
 
         CandlePatternResult candle = BearishCandlePatterns.detect(bars);
 
-        int criteriaMet = (elliottOk ? 1 : 0) + (macdOk ? 1 : 0) + (stochOk ? 1 : 0);
+        int criteriaMet = (elliott.genuine() ? 1 : 0) + (macdOk ? 1 : 0) + (stochOk ? 1 : 0);
 
-        return new IndicatorResult(elliottOk, macdOk, stochOk, criteriaMet, candle);
+        return new IndicatorResult(elliott.genuine(), elliott.stage(), macdOk, stochOk, criteriaMet, candle);
     }
 
     // ── MACD ─────────────────────────────────────────────────────────────────
 
-    /** Gibt true zurück wenn MACD-Histogramm positiv ist. */
     static boolean calcMacdIsPositive(double[] closes) {
         if (closes.length < MACD_SLOW + MACD_SIGNAL)
             return false;
@@ -79,7 +80,6 @@ public class BearishIndicator {
 
     // ── SLOW STOCHASTIK ───────────────────────────────────────────────────────
 
-    /** Gibt true zurück wenn Slow %K über 80 (überkauft). */
     static boolean calcStochIsOverbought(List<OhlcvBar> bars) {
         int minLen = STOCH_K + STOCH_D * 2;
         if (bars.size() < minLen)
@@ -107,79 +107,176 @@ public class BearishIndicator {
 
     // ── ELLIOTT WAVE 1-2-3-4-5 (AUFWÄRTS) - via ta4j ─────────────────────────
 
-    // Wellen-Grad für die Elliott-Analyse. Bei ~90 Tageskerzen Fensterbreite
-    // ist MINOR ein vernünftiger Startpunkt (siehe ta4j-Wiki: "Daily bars:
-    // PRIMARY through MINUTE degrees") - bei Bedarf anhand echter Logs
-    // nachjustieren. Von BullishIndicator mitgenutzt (dieselbe Frage:
-    // "wie sicher müssen wir uns sein").
-    static final ElliottDegree DEGREE = ElliottDegree.MINOR;
-
-    // Mindest-Konfidenz (0.0-1.0), ab der ein Szenario als belastbar genug
-    // gilt, um das Kriterium auszulösen. ta4j bewertet kontinuierlich statt
-    // hartem Pass/Fail (Fibonacci-Nähe, Zeit-Proportionen, Alternation,
-    // Channel-Einhaltung, Struktur-Vollständigkeit) - siehe ta4j-Wiki
-    // "Confidence Scoring". 0.6 ist ein konservativer Startwert.
     static final double MIN_CONFIDENCE = 0.6;
 
     /**
-     * Erkennt eine vollständige, klassisch-konforme Elliott-Impulswelle
-     * 1-2-3-4-5 (Aufwärts) über ta4j's ElliottWaveFacade. Ersetzt die
-     * handgestrickte Vorgängerlogik (eigene ZigZag-Bestätigung, feste
-     * Fibonacci-Bänder, harte Pass/Fail-Regeln) durch ein ausgereiftes,
-     * szenario-basiertes Modell mit kontinuierlichem Confidence-Scoring
-     * (siehe ta4j-Wiki: Elliott Wave Indicators).
+     * Cross-Degree-Validierung: der Runner analysiert zusätzlich eine Stufe
+     * höher/tiefer als den gewählten Degree und gleicht die Szenarien ab.
+     * Konfiguration übernommen aus dem Praxistest mit dem ta4j-eigenen
+     * ElliottWavePresetDemo (live-Modus), das mit dem HIERARCHICAL_SWING-Profil
+     * den DIS-Strukturanker exakt auf den 27.03. gesetzt hat - unabhängig
+     * bestätigt durch manuelle Wellenzählung. Siehe Roadmap in CLAUDE.md.
      *
-     * Ein Treffer erfordert:
-     * - Ein Basis-Szenario (höchste Konfidenz) existiert für den
-     * aktuellen Balken.
-     * - Der Szenario-Typ ist ein Impuls (IMPULSE, nicht korrektiv).
-     * - Die Richtung ist bullisch (Welle 1 aufwärts).
-     * - Die aktuelle Phase ist WAVE5 (die Struktur ist vollständig, nicht
-     * nur "in Bildung").
-     * - Die Konfidenz liegt über MIN_CONFIDENCE.
+     * Voraussetzung: ta4j-core >=0.22.7 (ElliottLogicProfile existiert erst ab
+     * dieser Version - pom.xml wurde am 31.07. entsprechend angehoben).
      */
-    static boolean detectElliottImpulseUp(List<OhlcvBar> bars, int lookback) {
-        int start = Math.max(0, bars.size() - lookback);
-        List<OhlcvBar> data = bars.subList(start, bars.size());
-        if (data.size() < 20) {
-            return false;
-        }
+    private static final int HIGHER_DEGREES = 1;
+    private static final int LOWER_DEGREES = 1;
+    private static final double RUNNER_MIN_CONFIDENCE = 0.15;
+    private static final int RUNNER_MAX_SCENARIOS = 5;
 
-        BarSeries series = toBarSeries(data);
-        int index = series.getEndIndex();
-
-        ElliottWaveFacade facade = ElliottWaveFacade.zigZag(series, DEGREE);
-        Optional<ElliottScenario> baseCase = facade.primaryScenario(index);
-        if (baseCase.isEmpty()) {
-            if (log.isDebugEnabled()) {
-                log.debug("ta4j Elliott 1-2-3-4-5 Check: kein Basis-Szenario gefunden [barIndex={}]", index);
-            }
-            return false;
-        }
-
-        ElliottScenario scenario = baseCase.get();
-        boolean genuine = scenario.type().isImpulse()
-                && scenario.hasKnownDirection()
-                && scenario.isBullish()
-                && scenario.currentPhase() == ElliottPhase.WAVE5
-                && scenario.confidence().isAboveThreshold(MIN_CONFIDENCE);
-
-        if (log.isDebugEnabled()) {
-            log.debug("ta4j Elliott 1-2-3-4-5 Check: Phase={} Typ={} Richtung={} Konfidenz={}% "
-                    + "Invalidierung={} Ziel={} Wellenanzahl={} [barIndex={}] -> {}",
-                    scenario.currentPhase(), scenario.type(), scenario.isBullish() ? "bullish" : "bearish",
-                    Math.round(scenario.confidence().asPercentage() * 10) / 10.0,
-                    scenario.invalidationPrice(), scenario.primaryTarget(),
-                    scenario.waveCount(), index, genuine ? "OK" : "kein Treffer");
-        }
-
-        return genuine;
+    record ElliottCheckResult(boolean genuine, String stage) {
+        static final ElliottCheckResult NONE = new ElliottCheckResult(false, "");
     }
 
     /**
-     * Wandelt unsere OHLCV-Kerzen in eine ta4j-BarSeries um. Von BullishIndicator
-     * mitgenutzt.
+     * Wählt den zur tatsächlichen Bar-Anzahl passenden Elliott-Degree über
+     * ta4js eigene Heuristik statt eines fest verdrahteten Werts. Grund:
+     * INTERMEDIATE empfiehlt laut ta4j-Doku 180-400 Tagesbars Historie; unser
+     * lookback (Default 90, im DIS-Fall real ~65 Bars) liegt deutlich darunter
+     * -> ta4j würde ohnehin zu MINOR (60-180 Bars) raten.
      */
+    static ElliottDegree selectDegree(int barCount) {
+        List<ElliottDegree> recommended = ElliottDegree.getRecommendedDegrees(Duration.ofDays(1), barCount);
+        return recommended.isEmpty() ? ElliottDegree.MINOR : recommended.get(0);
+    }
+
+    /**
+     * Führt die Elliott-Wave-Analyse über den {@link ElliottWaveAnalysisRunner}
+     * statt der nackten {@code ElliottWaveFacade} aus. Ersetzt den händisch
+     * kalibrierten Compressor-Ansatz (Stand 30.07.) - der Runner mit dem
+     * HIERARCHICAL_SWING-Profil und Cross-Degree-Validierung (+-1 Grad) hat
+     * sich im DIS-Praxisfall als deutlich treffsicherer erwiesen. Zentral für
+     * Bullish- und Bearish-Check, damit beide Richtungen dieselbe Kalibrierung
+     * verwenden.
+     */
+    static Optional<ElliottAnalysisResult> analyze(BarSeries series, ElliottDegree degree) {
+        ElliottWaveAnalysisRunner runner = ElliottWaveAnalysisRunner.builder()
+                .degree(degree)
+                .logicProfile(ElliottLogicProfile.HIERARCHICAL_SWING)
+                .higherDegrees(HIGHER_DEGREES)
+                .lowerDegrees(LOWER_DEGREES)
+                .minConfidence(RUNNER_MIN_CONFIDENCE)
+                .maxScenarios(RUNNER_MAX_SCENARIOS)
+                .build();
+        ElliottWaveAnalysisResult result = runner.analyze(series);
+        return result.analysisFor(degree).map(ElliottWaveAnalysisResult.DegreeAnalysis::analysis);
+    }
+
+    static Optional<ElliottScenario> selectScenario(ElliottScenarioSet scenarioSet,
+            Predicate<ElliottScenario> typeMatches) {
+        Optional<ElliottScenario> base = scenarioSet.base();
+        if (base.filter(typeMatches).isPresent()) {
+            return base;
+        }
+        return scenarioSet.alternatives().stream()
+                .filter(typeMatches)
+                .max(Comparator.comparingDouble(scenario -> scenario.confidence().asPercentage()));
+    }
+
+    static String describeStage(ElliottScenario scenario) {
+        ElliottPhase phase = scenario.currentPhase();
+        if (phase == null) {
+            return "";
+        }
+        return switch (phase) {
+            case WAVE1 -> "Welle 1 im Entstehen";
+            case WAVE2 -> "Welle 1 abgeschlossen, Welle 2 im Entstehen";
+            case WAVE3 -> "Wellen 1-2 abgeschlossen, Welle 3 im Entstehen";
+            case WAVE4 -> "Wellen 1-3 abgeschlossen, Welle 4 im Entstehen";
+            case WAVE5 -> "Wellen 1-4 abgeschlossen, Welle 5 im Entstehen";
+            case CORRECTIVE_A -> "Welle A im Entstehen";
+            case CORRECTIVE_B -> "A abgeschlossen, B im Entstehen";
+            case CORRECTIVE_C -> "A-B abgeschlossen, C im Entstehen";
+            default -> phase.name();
+        };
+    }
+
+    static String describeSwings(List<OhlcvBar> data, ElliottScenario scenario) {
+        List<ElliottSwing> swings = scenario.swings();
+        if (swings.isEmpty()) {
+            return "";
+        }
+        boolean impulse = scenario.type().isImpulse();
+        StringBuilder sb = new StringBuilder();
+        for (int i = 0; i < swings.size(); i++) {
+            ElliottSwing swing = swings.get(i);
+            String label = impulse ? String.valueOf(i + 1) : String.valueOf((char) ('A' + i));
+            if (i > 0) {
+                sb.append(" | ");
+            }
+            sb.append(label).append(": ");
+            if (swing.fromIndex() >= 0 && swing.fromIndex() < data.size()) {
+                sb.append(data.get(swing.fromIndex()).date()).append(" (")
+                        .append(BullishIndicator.round(swing.fromPrice().doubleValue())).append(")");
+            } else {
+                sb.append("?");
+            }
+            sb.append(" -> ");
+            if (swing.toIndex() >= 0 && swing.toIndex() < data.size()) {
+                sb.append(data.get(swing.toIndex()).date()).append(" (")
+                        .append(BullishIndicator.round(swing.toPrice().doubleValue())).append(")");
+            } else {
+                sb.append("?");
+            }
+        }
+        return sb.toString();
+    }
+
+    static boolean detectElliottImpulseUp(List<OhlcvBar> bars, int lookback) {
+        return checkElliottImpulseUp(bars, lookback).genuine();
+    }
+
+    static ElliottCheckResult checkElliottImpulseUp(List<OhlcvBar> bars, int lookback) {
+        int start = Math.max(0, bars.size() - lookback);
+        List<OhlcvBar> data = bars.subList(start, bars.size());
+        if (data.size() < 20) {
+            return ElliottCheckResult.NONE;
+        }
+
+        BarSeries series = toBarSeries(data);
+        ElliottDegree degree = selectDegree(data.size());
+        Optional<ElliottAnalysisResult> analysisOpt = analyze(series, degree);
+        if (analysisOpt.isEmpty()) {
+            if (log.isDebugEnabled()) {
+                log.debug("ta4j Elliott 1-2-3-4-5 Check: Degree={} keine Analyse für diesen Degree verfügbar",
+                        degree);
+            }
+            return ElliottCheckResult.NONE;
+        }
+
+        ElliottAnalysisResult analysis = analysisOpt.get();
+        int index = analysis.index();
+        ElliottScenarioSet scenarioSet = analysis.scenarios();
+
+        Optional<ElliottScenario> selected = selectScenario(scenarioSet, scenario -> scenario.type().isImpulse());
+        if (selected.isEmpty()) {
+            if (log.isDebugEnabled()) {
+                log.debug("ta4j Elliott 1-2-3-4-5 Check: Degree={} kein passendes Szenario gefunden [barIndex={}]",
+                        degree, index);
+            }
+            return ElliottCheckResult.NONE;
+        }
+
+        ElliottScenario scenario = selected.get();
+        boolean genuine = scenario.hasKnownDirection()
+                && scenario.isBullish()
+                && scenario.currentPhase() == ElliottPhase.WAVE5
+                && scenario.confidence().isAboveThreshold(MIN_CONFIDENCE);
+        String stage = describeStage(scenario);
+
+        if (log.isDebugEnabled()) {
+            log.debug("ta4j Elliott 1-2-3-4-5 Check: Degree={} Phase={} Typ={} Richtung={} Konfidenz={}% "
+                    + "Invalidierung={} Ziel={} Wellenanzahl={} Wellen=[{}] [barIndex={}] -> {}",
+                    degree, scenario.currentPhase(), scenario.type(), scenario.isBullish() ? "bullish" : "bearish",
+                    Math.round(scenario.confidence().asPercentage() * 10) / 10.0,
+                    scenario.invalidationPrice(), scenario.primaryTarget(),
+                    scenario.waveCount(), describeSwings(data, scenario), index, genuine ? "OK" : "kein Treffer");
+        }
+
+        return new ElliottCheckResult(genuine, stage);
+    }
+
     static BarSeries toBarSeries(List<OhlcvBar> bars) {
         BarSeries series = new BaseBarSeriesBuilder().withName("agent-service-analysis").build();
         Instant previousEndTime = null;
@@ -205,19 +302,6 @@ public class BearishIndicator {
         return series;
     }
 
-    /**
-     * bar.date() kann drei Formate haben:
-     * - reines Datum (1d): "2026-05-19"
-     * - lokaler Zeitstempel ohne Zone (1h/4h, von twelvedata so geliefert):
-     * "2026-05-19T12:30:00"
-     * - vollqualifizierter ISO-Instant mit Zone/Offset: "2026-05-19T12:30:00Z"
-     * Reihenfolge ist wichtig: erst der spezifischste Versuch (Instant mit
-     * Zone), dann LocalDateTime (hat "T", aber keine Zone), zuletzt
-     * LocalDate (nur Datum, kein "T") - jeder fehlgeschlagene Versuch wirft
-     * eine DateTimeParseException, mit der zum nächsten Format
-     * weitergereicht wird. Ohne den LocalDateTime-Zwischenschritt schlagen
-     * 1H/4H-Zeitstempel fehl (siehe Praxisfall AMZN 1H, 07/2026).
-     */
     static Instant parseBarDate(String date) {
         try {
             return Instant.parse(date);
