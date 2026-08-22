@@ -130,6 +130,21 @@ export interface StockResult {
 }
 ```
 
+**Elliott-Wave-Spalte in `results-table_component.ts` (02.08.):** Die frühere
+Farbunterscheidung (`elliott-confirmed` kräftig blau bei `elliott_wave=true`
+vs. `elliott-progress` gedeckt grau bei reinem Zwischenstand) wurde entfernt -
+Rolfs Wunsch nach einheitlichem Text (`#1a1f2e`, passend zur globalen
+Textfarbe aus `styles.scss`). Grund: seit die Backend-Stage-Notation nur noch
+vollendete Wellen kompakt zeigt (`"A-B-"`), fühlte sich die Farbunterscheidung
+redundant an. `elliottWaveBadgeClass()` dadurch auf parameterlos vereinfacht.
+Der `matTooltip` (bestätigt vs. Zwischenstand) blieb unverändert erhalten.
+
+**Geplant, noch nicht begonnen ("Option C", siehe 3.2c):** `StockResult` soll
+um ein `elliottChart`-Feld erweitert werden (Bars + Swing-Punkte + Zielpreis
+des gewählten Szenarios), damit das Frontend selbst einen Wellen-Chart
+rendern kann (Thumbnail in neuer Spalte, Klick → Modal). Kandidat für die
+Chart-Bibliothek: `lightweight-charts` (TradingView).
+
 ### 3.2 Agent Service (`agent-service/`)
 
 | Eigenschaft  | Wert                           |
@@ -191,52 +206,103 @@ parallel läuft – Stand dieser Doku ist unklar, da das im Rahmen der Session n
 final geklärt wurde.
 
 **Elliott-Wave-Erkennung läuft seit 07/2026 über [ta4j](https://github.com/ta4j/ta4j)**,
-nicht mehr über eine handgestrickte Implementierung. **Seit 31.07. über
-`ElliottWaveAnalysisRunner`** (0.22.4+) statt der nackten `ElliottWaveFacade` –
-zweiter Umbau innerhalb der ta4j-Migration, siehe Praxisfall DIS unten:
+nicht mehr über eine handgestrickte Implementierung. Läuft seit 31.07. über
+`ElliottWaveAnalysisRunner` (0.22.4+) statt der nackten `ElliottWaveFacade`.
+**`ta4j-core` ist seit 01.08. auf `0.22.7` angehoben und produktiv verifiziert**
+(mehrere erfolgreiche DAX-/Dow-Jones-Komplettläufe seit 01.–03.08., inkl.
+`ElliottLogicProfile.HIERARCHICAL_SWING`) – der frühere offene Punkt "Build nach
+Upgrade nicht verifiziert" ist damit erledigt.
+
+**Zentrale Hilfsklasse: `ElliottAnalysisSupport` → `ElliottAnalysisUtil`
+(01.08., auf Rolfs Wunsch umbenannt).** Vorher direkte Querverweise
+(`BearishIndicator.xyz` aus `BullishIndicator` heraus) - jetzt eigene,
+package-private Klasse in `rf.stock.agent.indicator`, die beide Indicator-
+Klassen nutzen: `selectDegree`, `analyze`, `selectScenario`, `describeStage`,
+`describeTarget`, `describeSwings`, `toBarSeries`, `parseBarDate`,
+`ElliottCheckResult`-Record, `MIN_CONFIDENCE`.
 
 - `BullishIndicator.checkElliottABC()` – erkennt abgeschlossene Abwärtskorrekturen
-  (Typ `CORRECTIVE`, Phase `CORRECTIVE_C`, Richtung bearish, Konfidenz ≥ `MIN_CONFIDENCE`)
+  (Typ `CORRECTIVE`, Phase `CORRECTIVE_C`, Richtung bearish, Konfidenz ≥ `MIN_CONFIDENCE`,
+  **seit 03.08. zusätzlich `scenarioSet.hasStrongConsensus()` erforderlich** - siehe unten)
 - `BearishIndicator.checkElliottImpulseUp()` – erkennt vollständige 5-Wellen-Impulse
-  aufwärts (Typ `IMPULSE`, Phase `WAVE5`, Richtung bullish, Konfidenz ≥ `MIN_CONFIDENCE`)
-- Beide liefern zusätzlich `elliottStage` (String, z.B. "A-B abgeschlossen, C im
-  Entstehen") über `BearishIndicator.describeStage()` – zeigt den aktuellen
-  Wellen-Zwischenstand unabhängig davon, ob der harte Trigger (genuine) ausgelöst
-  hat. Durchgereicht bis ins Angular-Frontend (`elliott_wave_stage`, Spalte
-  "Elliott Wave" – bestätigte Muster kräftig blau, reine Zwischenstände gedeckt
-  grau dargestellt).
-- **`BearishIndicator.analyze(series, degree)`**: zentrale Analyse-Methode, baut
-  einen `ElliottWaveAnalysisRunner` mit `.logicProfile(ElliottLogicProfile.
-  HIERARCHICAL_SWING)`, `.higherDegrees(1)`, `.lowerDegrees(1)` (Cross-Degree-
-  Validierung – eine Stufe höher/tiefer wird mitanalysiert und abgeglichen),
-  `.minConfidence(0.15)`, `.maxScenarios(5)`. Liefert `ElliottAnalysisResult`
-  für den übergebenen Degree zurück.
-- **`BearishIndicator.selectScenario(scenarioSet, typeMatches)`**: Auswahl-Logik,
-  arbeitet auf `ElliottScenarioSet` (`.base()`/`.alternatives()`) statt direkt auf
-  der Facade. Prüft zuerst `scenarioSet.base()`; passt dessen Typ nicht (z.B.
-  Impuls statt Korrektur), wird unter `.alternatives()` nach der Konfidenz-
-  stärksten Alternative des gesuchten Typs gesucht, bevor aufgegeben wird.
-- **`BearishIndicator.selectDegree(barCount)`**: wählt den Elliott-Degree dynamisch
-  über `ElliottDegree.getRecommendedDegrees(Duration.ofDays(1), barCount)` statt
-  eines fest verdrahteten Werts (vorher `ElliottDegree.INTERMEDIATE` fix, siehe
-  Praxisfall DIS unten für den Grund der Umstellung).
-- **Vorherige Zwischenlösung (30.07., inzwischen abgelöst):** `ElliottWaveFacade.
-  zigZag(series, degree, Optional.empty(), Optional.of(compressor))` mit
-  handkalibriertem `ElliottSwingCompressor` (4,5% Mindestamplitude, 3 Bars
-  Mindestlänge) – funktionierte, war aber eine grob geschätzte Konstante ohne
-  Bezug zu ta4js eigener Multi-Degree-Logik. Durch den Runner-Ansatz ersetzt,
-  Compressor-Code komplett entfernt.
-- **Voraussetzung für `ElliottLogicProfile`: ta4j-core ≥0.22.7.** Die vorher
-  genutzte `0.22.6` kennt diese Klasse noch nicht (Compile-Fehler `cannot find
-  symbol class ElliottLogicProfile`). `pom.xml` wird auf `0.22.7` angehoben
-  (Rolfs Entscheidung, 31.07.) – **TODO: Build nach dem Upgrade noch nicht
-  verifiziert, siehe Roadmap.**
+  aufwärts (Typ `IMPULSE`, Phase `WAVE5`, Richtung bullish, dieselben zusätzlichen
+  Bedingungen)
+- **`ElliottAnalysisUtil.describeStage()` seit 01.08. komplett umgestellt**: statt
+  vollständiger deutscher Sätze ("A-B abgeschlossen, C im Entstehen") jetzt
+  **kompakte Notation nur der bereits VOLLENDETEN Wellen**, z.B. `"A-B-"` wenn
+  Korrektur-Welle C im Entstehen ist, `"1-2-"` wenn Impuls-Welle 3 im Entstehen
+  ist. Die im-Entstehen-Welle selbst taucht bewusst nicht auf. `"1-2-..."`
+  impliziert Impuls, `"A-B-..."` impliziert Korrektur - keine zusätzliche
+  Typ-Kennzeichnung nötig (Rolf-Vorgabe). Leerstring bei `WAVE1`/`CORRECTIVE_A`
+  (noch nichts vollendet).
+- **`ElliottAnalysisUtil.describeTarget()` (neu, 03.08.)**: hängt an die
+  kompakte Notation ein Kursziel an, z.B. `"A-B- -> 50% 75,00"`. **Der Preis
+  kommt direkt von ta4j** (`scenario.primaryTarget()`). **Die Prozentzahl NICHT**
+  - per `javap` verifiziert (`ElliottScenario`, `ElliottProjectionIndicator`,
+  `ElliottRatioIndicator`): keine dieser Klassen liefert eine zu einem
+  projizierten Ziel passende Fibonacci-Ratio, nur nackte Preise
+  (`fibonacciTargets()` ist eine reine `List<Num>` ohne Label).
+  `ElliottRatioIndicator` berechnet nur die Ratio des AKTUELLEN Kurses zum
+  letzten Swing, nicht die eines Ziels. **Die Prozentzahl ist daher unsere
+  eigene Näherung**: Bewegung vom Start der aktuell laufenden Welle bis zum
+  Zielpreis, im Verhältnis zur Amplitude der unmittelbar davor abgeschlossenen
+  Welle. Einmal an CAT validiert (berechnet 40%, Ziel lag nah am echten 38,2%-
+  Fibonacci-Level) - vielversprechend, aber nur EIN Datenpunkt. **Bekannte
+  Schwachstelle:** klassische Elliott-Praxis misst je nach Wellenposition
+  gegen eine andere Referenzwelle (z.B. C typischerweise gegen A, nicht gegen
+  B; Impuls-Wellen 3/5 oft als Extension statt Retracement) - unsere Formel
+  nimmt immer nur die unmittelbar davorliegende Welle. Noch nicht an A/B/C und
+  1-2-3-4-5-Positionen systematisch durchgetestet (Rolf sammelt weitere Fälle).
+- **Eigener, größerer Lookback nur für Elliott (`AnalysisService.
+  ELLIOTT_LOOKBACK_BY_INTERVAL`, 02./03.08.)**: `"1d"` → **230** (Tage/Bars,
+  siehe Caveat unten), `"4h"`/`"1h"` vorerst unverändert zum allgemeinen
+  Lookback. Grund: bei nur 90 Bars sieht der Runner den strukturell korrekten
+  Wellenanfang oft nicht mehr (siehe Praxisfall IFX unten). MACD/Stochastik
+  bleiben bewusst beim kleinen allgemeinen Lookback - brauchen die
+  zusätzliche Historie nicht. **Caveat, noch nicht bereinigt:** Der Wert
+  fließt sowohl als Kalendertage in `yahoo-service`s `period=f"{outputsize}d"`
+  (yfinance) als auch als BAR-Anzahl in unsere interne Slice-Logik
+  (`bars.subList(...)`) - zwei verschiedene Einheiten, derselbe Zahlenwert.
+  Praktisch unschädlich (Slice-Grenze greift kaum, da weniger Bars als
+  Kalendertage real ankommen), aber unsauber. `evaluate()` in beiden
+  Indicator-Klassen nimmt seitdem nur noch `elliottLookback` entgegen - der
+  alte allgemeine `lookback`-Parameter war dort ohnehin nie genutzt (MACD/
+  Stochastik arbeiten immer auf der vollen `bars`-Liste) und wurde entfernt.
+- **`scenarioSet.hasStrongConsensus()` als zusätzliches Gate (03.08.)**: `genuine`
+  verlangt jetzt zusätzlich, dass sich die konkurrierenden Szenarien nicht
+  deutlich widersprechen. Grund: `confidence` allein kann irreführend sein
+  (siehe "Confidence vs. Probability" unten) - Konsens ist der günstigste
+  verfügbare Proxy dafür, ohne die große Makro-Engine zu brauchen.
+  `confidenceSpread()` wird zusätzlich fürs Debug-Log mitgeloggt (`Konsens=`,
+  `Spread=`). **WICHTIG, noch offen:** Rolf hat am 03.08. angemerkt, dass er
+  das evtl. **wieder rückgängig machen** möchte, nachdem er mehr Praxisfälle
+  gesehen hat - noch nicht entschieden, nur im Hinterkopf zu behalten. Vor
+  einem Revert: prüfen, wie viele bisher als `genuine=true` erkannte Fälle
+  durch das Konsens-Gate neu herausgefiltert werden.
+- **"Confidence" ist NICHT "Wahrscheinlichkeit" (Erkenntnis 03.08.)**: `confidence`
+  (`ElliottScenario.confidence()`) ist ein reiner Struktur-Qualitätsscore für
+  EIN Szenario für sich genommen (35% Fibonacci-Nähe, 20% Zeitproportionen,
+  15% Alternation, 15% Kanal, 15% Vollständigkeit). Belegt an einem DAX-Beispiel
+  (`ElliottWaveMacroCycleDemo`-JSON, ^GDAXI): das gewinnende Szenario
+  (`totalScore=1.0`) hatte mit 41% die NIEDRIGSTE Confidence von 5 Kandidaten,
+  während das Szenario mit der höchsten Confidence (64%) auf dem letzten Platz
+  landete (`totalScore=0.844`). `totalScore` ist rechnerisch nur `probability`
+  normiert auf den besten Kandidaten - und `probability`/`totalScore` existieren
+  **ausschließlich in der großen `ElliottWaveMacroCycleDemo`-Engine**, nicht auf
+  `ElliottScenarioSet`/`ElliottScenario` (per `javap` gegen `ElliottScenarioSet`
+  verifiziert - kein `probability`-Feld, keine entsprechende Methode; einzige
+  Ranking-Hilfe dort ist `byConfidenceDescending()`, was nahelegt, dass
+  Confidence-Ranking der auf unserer einfacheren API-Ebene vorgesehene Weg ist).
 - **Dieselbe ta4j-Berechnung läuft weiterhin zweimal pro Ticker** (einmal je
   Klasse, bekannter, nicht behobener Effizienz-Punkt).
 - **OHLC/High-Low ist bereits Standard**, nicht konfigurierbar: `javap` auf
   `ElliottWaveFacade` und `SwingDetectors` bestätigt, dass keine der Methoden
   einen Preistyp-Parameter (z.B. `PriceType`) hat - die Doku beschreibt das
-  ZigZag explizit als "OHLC-aware". Kein Handlungsbedarf für High/Low-Präferenz.
+  ZigZag explizit als "OHLC-aware". **Praxisfall IFX (03.08.) bestätigt das als
+  richtige Wahl**: Rolfs Charting-Tool (finanzen.net TradingDesk) macht seine
+  automatische Wellenerkennung auf Open/Close-Basis, ta4j auf High/Low - das
+  hatte zu scheinbaren Diskrepanzen geführt, war aber kein ta4j-Fehler, nur ein
+  Vergleich unterschiedlicher Berechnungsbasen.
 - ta4j bewertet kontinuierlich über Confidence-Scoring statt hartem Pass/Fail -
   ersetzt eine mehrwöchige, mehrfach nachkalibrierte Eigenentwicklung (Kaufman
   Efficiency Ratio, feste Fibonacci-Bänder, ZigZag-Bestätigung), die als
@@ -248,16 +314,49 @@ zweiter Umbau innerhalb der ta4j-Migration, siehe Praxisfall DIS unten:
 - **Code-Stil-Konvention (07/2026):** Kommentare bewusst minimal halten,
   aussagekräftige Namensgebung statt erklärender Prosa bevorzugen (Rolf-Vorgabe).
 
-**ta4j-API, verifiziert per `javap` gegen `ta4j-core-0.22.6.jar` (Kernklassen)
-sowie per offizieller ta4j-Wiki-Doku (`ElliottWaveAnalysisRunner`,
-`ElliottLogicProfile`, `ElliottDegree.getRecommendedDegrees`, `ElliottScenarioSet`
-– noch nicht per `javap` gegengeprüft, da diese Klassen erst ab 0.22.4/0.22.7
-existieren und `javap` bisher nur gegen das ältere `0.22.6`-Jar lief):**
+**Die große `ta4jexamples.analysis.elliottwave.backtest.ElliottWaveMacroCycleDemo`-
+Engine (Quellcode am 02.08. gesichtet, ~2600 Zeilen) - bewusst NICHT portiert:**
+Erkennt Makro-Zyklus-Anker (den "richtigen" großen Wellenanfang) über einen
+Vergleich von 5 `ElliottLogicProfile`-Hypothesen (H0-H4, alle auf `MINUTE`-Degree
+gegen die volle Historie), die rohen Pivots (`rawSwings()`, nicht `scenarios()`)
+zu Makro-Drawdowns kollabiert (`ElliottWaveMacroCycleDetector`,
+55%-Drawdown-Schwelle über min. 120 Tage) und gegen ein Truth-Target-Register
+bewertet. Profilnamen (`BTC_RELAXED_IMPULSE`/`BTC_RELAXED_CORRECTIVE`) und das
+Holdout-Registry-Konzept deuten auf ein internes ta4j-Validierungs-Framework
+gegen Bitcoin-Historie hin, nur zweitverwertet über `ElliottWavePresetDemo
+live`. Portierung realistisch mehrere Tage Aufwand, deshalb zurückgestellt -
+die einfachere `ELLIOTT_LOOKBACK`-Erhöhung (230 Tage) lieferte in Demo-Tests
+bei IFX/GDAXI über einen Bereich von 200-1000 Tagen einen stabilen, identischen
+Zyklus-Anker, was den großen Umbau vorerst unnötig macht. `ElliottWaveMacroCycleDetector`
+selbst (der reine Anker-Erkennungs-Baustein, ~200 Zeilen) hängt NUR an
+öffentlicher `ta4j-core`-API - falls der `ELLIOTT_LOOKBACK`-Ansatz an seine
+Grenzen stößt, wäre das der pragmatischste Wiedereinstiegspunkt (als
+Vorverarbeitungsschritt vor `ElliottAnalysisUtil.analyze()`, nicht als volle
+Engine-Portierung).
+
+**ta4j-API, verifiziert per `javap` gegen `ta4j-core-0.22.7.jar` sowie per
+offizieller ta4j-Wiki-Doku:**
 - `ElliottScenario.swings()` → `List<ElliottSwing>`; `ElliottSwing` ist ein
   Record mit `fromIndex()`/`toIndex()` (Kerzenindex) und `fromPrice()`/
   `toPrice()` (`Num`) pro Wellen-Bein - Basis für `describeSwings()` (loggt
   Datum+Kurs jeder Welle, damit sich Treffer direkt im Chart nachvollziehen
-  lassen).
+  lassen). `ElliottScenario` ist ein Record mit `primaryTarget()` (`Num`,
+  EIN Zielpreis) und `fibonacciTargets()` (`List<Num>`, mehrere Kandidaten-
+  Zielpreise) - **beide ohne zugehöriges Fibonacci-Ratio-Label** (03.08.,
+  siehe `describeTarget()` oben).
+- `ElliottScenarioSet` (03.08. per `javap` geprüft): `.base()`, `.alternatives()`,
+  `.all()`, `.byPhase(...)`, `.byType(...)`, `.consensus()`, `.trendBias()`,
+  `.confidenceSpread()`, `.hasStrongConsensus()`, `.invalidatedBy(...)`,
+  `.validAt(...)`. **Kein `probability`/`totalScore`** - einzige eingebaute
+  Sortierhilfe ist die statische `byConfidenceDescending()`.
+- `ElliottProjectionIndicator.allTargets(int)`/`calculateTargets(swings, phase)`
+  liefern `List<Num>` (reine Preise) - keine Ratio-Zuordnung. Die
+  wellentyp-spezifische Logik dahinter (`calculateImpulseTargets`/
+  `calculateCorrectiveTargets`) ist `private`, für uns nicht direkt nutzbar.
+- `ElliottRatioIndicator.calculate(int)` liefert `ElliottRatio` (Typ + Wert,
+  z.B. `RETRACEMENT 0.94`) - aber bezogen auf den AKTUELLEN Kurs relativ zum
+  letzten Swing, nicht auf ein projiziertes Ziel. Für unseren Kursziel-
+  Anwendungsfall nicht direkt verwendbar.
 - `ElliottWaveFacade` hat **kein** `.facade(...)`, nur `.zigZag(...)` und
   `.fractal(...)` als Swing-Detektor-Konstruktoren, plus `.from(...)` für
   eigene Detektoren. Zweiter, mächtigerer Einstiegspunkt (seit 31.07. genutzt):
@@ -273,7 +372,15 @@ existieren und `javap` bisher nur gegen das ältere `0.22.6`-Jar lief):**
   `ElliottWaveMultiDegreeAnalysisDemo` dagegen hat **keine CLI-Unterstützung für
   Live-Datenquellen** (läuft nur gegen ein fest einprogrammiertes ossifiziertes
   BTC-Testset) – für Ticker-spezifische Tests ungeeignet, `ElliottWavePresetDemo`
-  im `live`-Modus nutzen (z.B. `live YahooFinance DIS PT1D 400`).
+  im `live`-Modus nutzen (z.B. `live YahooFinance IFX.DE PT1D 230`). Bei
+  `PT1D`/`PT24H` routet das automatisch in `ElliottWaveMacroCycleDemo.
+  runLivePreset(...)` (siehe oben) - der `degree`-Parameter wird dabei
+  ignoriert, die Engine wählt selbst über die 5 Hypothesen.
+- **Ta4j selbst empfiehlt laut Wiki explizit, KEINE ta4j-eigenen Chart-Renderer
+  in Produktivcode zu übernehmen**: *"Ta4j includes charting helpers, but
+  you're not locked in - serialize to JSON and use any visualization stack you
+  prefer."* Bestätigt die Entscheidung für Option C bei der geplanten Frontend-
+  Visualisierung (siehe Roadmap).
 
 **Remote-Debugging (VS Code, JDWP):** `JAVA_TOOL_OPTIONS=-agentlib:jdwp=transport=dt_socket,server=y,suspend=n,address=*:5005`
 als Env-Var in `docker-compose.yml` beim `agent-service-java`-Service, Port
@@ -309,6 +416,24 @@ Breakpoints trotzdem greifen). Kein Rebuild nötig, nur `docker compose up -d`.
 - **AMZN [1H]:** `parseBarDate()` scheiterte an Zeitstempeln ohne Zone
   (`"2026-05-19T12:30:00"`, Format bei 1H/4H-Daten von TwelveData) - Fix über
   `LocalDateTime`-Zwischenschritt vor dem `LocalDate`-Fallback.
+- **IFX (01.–03.08.):** Gleiches Grundmuster wie DIS - `checkElliottABC` fand
+  bei 90 Bars nur einen kleinen lokalen Pivot (74,02) als Wellenstart A, statt
+  des strukturell korrekten Hochs bei 88,46/88,83 (02./22.06.). `ElliottWavePresetDemo
+  live`-Test (400 Kalendertage) zeigte den wahren Rahmen: eine seit 23.03.2026
+  laufende Welle 2 (Korrektur) innerhalb eines viel größeren bullishen Impulses
+  (Welle 1 von 36€ auf 88€), mit Fibonacci-Score 99,2%. Stabilitätstest über
+  200/400/1000/1825 Kalendertage: der Zyklus-Anker (23.03.) blieb über den
+  gesamten Bereich 200-1000 Tage identisch stabil, kippte erst bei den vollen
+  1825 Tagen auf einen noch größeren, älteren Zyklus (Juli 2022) - legitime
+  Elliott-Fraktalität, kein Fehler. Führte zur `ELLIOTT_LOOKBACK`-Einführung
+  (230 Tage, siehe oben) statt einer vollen Portierung der `MacroCycleDemo`-
+  Engine. Nebenbefund: Rolfs Charting-Tool (finanzen.net) rechnet auf Open/
+  Close-Basis, ta4j auf High/Low - erklärte frühere scheinbare Diskrepanzen,
+  kein ta4j-Fehler (siehe oben).
+- **GDAXI (03.08.):** Lieferte den Beweis für "Confidence ≠ Wahrscheinlichkeit"
+  (siehe oben) - Base Case gewann mit der niedrigsten Confidence (41%) aller 5
+  Szenarien, das Szenario mit der höchsten Confidence (64%) landete auf dem
+  letzten Platz nach `totalScore`.
 
 **Migration Java 21 → 25 / Spring Boot 3.4 → 4.1 (07/2026):**
 - Grund: Spring Boot 3.4 und 3.5 sind beide EOL (Stand 07/2026), daher direkter
@@ -335,19 +460,44 @@ Breakpoints trotzdem greifen). Kein Rebuild nötig, nur `docker compose up -d`.
   verdrahtet.
 - **ta4j-Szenario wird doppelt berechnet** (einmal in `BullishIndicator`, einmal in
   `BearishIndicator`) – Zusammenlegung möglich, aber noch nicht umgesetzt.
-- **Build nach `ta4j-core`-Upgrade auf 0.22.7 noch nicht verifiziert** (Stand
-  31.07.) – `ElliottLogicProfile` existierte in der vorherigen `0.22.6` noch
-  nicht (Compile-Fehler), Rolf hebt `pom.xml` an. Nächster Schritt: Docker-
-  Rebuild, danach DIS-Fall im Produktivcode erneut gegen die manuelle
-  Wellenzählung prüfen (siehe Praxisfall DIS oben).
+- **`hasStrongConsensus()`-Gate evtl. wieder rückgängig zu machen** (Stand 03.08.,
+  noch nicht entschieden) - Rolf will erst mehr Praxisfälle sammeln, bevor er
+  entscheidet, ob das Gate zu streng filtert. **Vor einem Revert prüfen:** wie
+  viele bisher als `genuine=true` erkannte Fälle fallen dadurch neu raus?
 - **`RUNNER_MIN_CONFIDENCE = 0.15`, `MIN_CONFIDENCE = 0.6`, `HIGHER_DEGREES`/
-  `LOWER_DEGREES = 1`** sind vom Praxistest mit dem ta4j-eigenen
-  `ElliottWavePresetDemo` übernommen, aber noch nicht im Produktivcode an
-  mehreren Tickern nachkalibriert.
-- **`elliottStage`-Text unterscheidet nicht zwischen "abgeschlossen" und
-  "läuft noch"** bei bereits bestätigten Treffern (z.B. zeigt ein bestätigtes
-  A-B-C weiterhin "C im Entstehen" statt "A-B-C abgeschlossen") - kosmetisch,
-  nicht behoben.
+  `LOWER_DEGREES = 1`, `ELLIOTT_LOOKBACK_BY_INTERVAL["1d"] = 230`** sind vom
+  Praxistest mit dem ta4j-eigenen `ElliottWavePresetDemo` übernommen, aber noch
+  nicht systematisch an vielen Tickern nachkalibriert.
+- **`describeTarget()`-Retracement-Prozentzahl nur an einem Fall (CAT) validiert**
+  - noch systematisch für A/B/C und 1-2-3-4-5-Positionen durchzutesten, siehe
+  bekannte Schwachstelle oben (Referenzwelle evtl. wellenpositionsabhängig
+  falsch gewählt, insb. bei C und bei Impuls-Extensions).
+- **Elliott-Lookback/Outputsize-Einheiten-Verwechslung** (Kalendertage vs.
+  Bar-Anzahl, siehe oben) - unschädlich, aber unsauber, bei Gelegenheit trennen.
+- **Praxisbeobachtung, noch nicht untersucht (Rolf, 03.08.):** Bei einigen
+  Tickern wird nach einem längeren Abwärtstrend eine sehr kleinteilige
+  Aufwärtsbewegung als Impuls ausgegeben - wirkt fragwürdig, noch nicht
+  eingegrenzt, auf welche Fälle/Muster das zutrifft.
+- **Frontend-Elliott-Wave-Chart-Visualisierung ("Option C", geplant, noch NICHT
+  begonnen)**: Rolf möchte in einer neuen Spalte rechts von "Elliott Wave" ein
+  Thumbnail sehen (Kerzen + eingezeichnete Swing-Punkte des gewählten
+  Szenarios), Klick öffnet größer in einem Modal - um visuell nachvollziehen zu
+  können, wie ta4j die Wellenzählung setzt. Entscheidung bereits getroffen:
+  strukturierte Daten (Bars + Swing-Punkte + Zielpreis) ans Angular-Frontend
+  schicken, dort mit einer JS-Chart-Bibliothek rendern (Kandidat: TradingViews
+  `lightweight-charts`) - NICHT serverseitig JFreeChart-Bilder erzeugen
+  (Headless-Swing-Komplexität im Alpine-Docker-Container) und NICHT die
+  `ta4jexamples.charting`-Klassen wiederverwenden (Beispielcode-Kopplung, siehe
+  MacroCycleDemo-Engine oben). Offene Design-Fragen vor Implementierung:
+  (1) wie viele Bars pro Ticker/Request mitschicken (voller
+  `elliottLookback`-Bereich vs. nur ab `scenario.startIndex()` - Trade-off
+  gegen SSE-Payload-Größe bei großen Multi-Ticker-Läufen); (2) Bestätigung
+  `lightweight-charts` als Bibliothek. **Rolf ist ab 03.08. für mehrere Tage
+  unterwegs, unklar wann er weitermacht - das ist der nächste anstehende
+  Schritt, sobald es weitergeht.**
+- **Klären: Python-`agent-service` (Port 8010) noch aktiv oder durch
+  `agent-service-java` ersetzt?**
+- **`stock-data-db-access`: README/Doku für Java-25-Stand ergänzen**
 
 
 
@@ -608,36 +758,66 @@ docker logs -f stock_history_fetcher
       `HIERARCHICAL_SWING`-Profil und Cross-Degree-Validierung (+-1 Grad) statt
       `ElliottWaveFacade` + handkalibriertem `ElliottSwingCompressor`. Durch
       Rolfs manuelle Wellenzählung unabhängig bestätigt (Strukturanker 27.03.)
-- [ ] `pom.xml` von `agent-service-java` auf `ta4j-core` ≥0.22.7 anheben
-      (`ElliottLogicProfile` existiert erst ab dieser Version), Build + DIS-Fall
-      im Produktivcode verifizieren - **in Arbeit, Ergebnis nächste Session**
+- [x] `pom.xml` von `agent-service-java` auf `ta4j-core` 0.22.7 angehoben,
+      Build + mehrere DAX-/Dow-Jones-Komplettläufe erfolgreich verifiziert
+- [x] Geteilte Elliott-Hilfsmethoden aus `BearishIndicator` in eigene Klasse
+      `ElliottAnalysisUtil` ausgelagert, von beiden Indicator-Klassen genutzt
+- [x] `elliottStage`-Ausgabe auf kompakte Nur-vollendete-Wellen-Notation
+      umgestellt ("A-B-"/"1-2-" statt Volltext-Sätze)
+- [x] Kursziel + eigene Retracement-Näherung in `elliottStage` ergänzt
+      (`describeTarget()`, z.B. "A-B- -> 50% 75,00") - Preis von ta4j, Prozent
+      selbst berechnet, einmal an CAT validiert
+- [x] Eigener, größerer Lookback nur für Elliott-Berechnung eingeführt
+      (`ELLIOTT_LOOKBACK_BY_INTERVAL["1d"]=230`) statt vollem Makro-Engine-Port
+      - IFX-Praxistest bestätigte stabilen Zyklus-Anker über 200-1000 Tage
+- [x] `scenarioSet.hasStrongConsensus()` als zusätzliches Gate für `genuine`
+      ergänzt, `confidenceSpread()` mitgeloggt (Stand 03.08. - evtl. wieder
+      rückgängig zu machen, siehe 3.2c, noch nicht entschieden)
+- [x] Elliott-Wave-Badge-Farblogik im Frontend entfernt (einheitliches Schwarz
+      statt blau/grau)
 - [ ] ta4j-Doppelberechnung (Bullish/Bearish) zusammenlegen
-- [ ] `RUNNER_MIN_CONFIDENCE`/`MIN_CONFIDENCE`/`HIGHER_DEGREES`/`LOWER_DEGREES`
-      an mehreren Tickern (nicht nur DIS) nachkalibrieren
-- [ ] `elliottStage`-Text zwischen "abgeschlossen" und "läuft noch" unterscheiden
+- [ ] `RUNNER_MIN_CONFIDENCE`/`MIN_CONFIDENCE`/`HIGHER_DEGREES`/`LOWER_DEGREES`/
+      `ELLIOTT_LOOKBACK` an mehreren Tickern (nicht nur DIS/IFX) nachkalibrieren
+- [ ] `describeTarget()`-Retracement-Prozentzahl an mehr Fällen (A/B/C, 1-2-3-4-5)
+      validieren - Referenzwelle evtl. wellenpositionsabhängig anzupassen
+- [ ] `hasStrongConsensus()`-Gate: entscheiden ob beibehalten oder Revert (03.08.)
+- [ ] Elliott-Lookback/Outputsize-Einheiten sauber trennen (Kalendertage vs.
+      Bar-Anzahl aktuell vermischt)
+- [ ] Praxisbeobachtung untersuchen: kleinteilige Aufwärtsbewegung nach langem
+      Abwärtstrend wird manchmal als Impuls erkannt (Rolf, 03.08., noch nicht
+      eingegrenzt)
+- [ ] **Nächster großer Schritt ("Option C"): Elliott-Wave-Chart-Thumbnail +
+      Modal im Angular-Frontend** - Backend liefert Bars+Swings+Ziel als JSON,
+      Frontend rendert mit `lightweight-charts` (Kandidat). Design-Fragen noch
+      offen (Bar-Menge im Payload, Bibliotheks-Bestätigung). **Rolf ist ab
+      03.08. mehrere Tage unterwegs - das ist der Wiedereinstiegspunkt.**
 - [ ] Klären: Python-`agent-service` (Port 8010) noch aktiv oder durch
       `agent-service-java` ersetzt?
 - [ ] `stock-data-db-access`: README/Doku für Java-25-Stand ergänzen
 
-**Zuletzt geändert:** 2026-07-31
-**Zuletzt bearbeitet von Claude:** Nach der ta4j-Migration und Java-25-Migration
-(29.07., siehe vorheriger Absatz) den DIS-Kalibrierungsfall bis zur Ursache
-durchdrungen: Rolf lieferte reale OHLCV-Daten, eine per Screenshot dokumentierte
-manuelle Wellenzählung und mehrere Konsolen-Läufe der ta4j-eigenen Demo-Tools
-(`ElliottWaveIndicatorSuiteDemo`, `ElliottWavePresetDemo`, teils per `javap`-
-Introspektion gegen `ta4j-core-0.22.6.jar` sowie ta4j-Wiki-Recherche ergänzt).
-Ergebnis (30.07., Zwischenstand): dynamischer Degree über `ElliottDegree.
-getRecommendedDegrees(...)` statt fest `INTERMEDIATE`, plus handkalibrierter
-`ElliottSwingCompressor` zur Rauschfilterung. Ergebnis (31.07., finaler Stand):
-Zwischenlösung durch `ElliottWaveAnalysisRunner` mit `ElliottLogicProfile.
-HIERARCHICAL_SWING` und Cross-Degree-Validierung (+-1 Grad) ersetzt, nachdem der
-`ElliottWavePresetDemo`-live-Lauf (276 Bars) den DIS-Strukturanker exakt auf den
-27.03. setzte - unabhängig durch Rolfs manuelle Zählung bestätigt. Voraussetzung
-`ta4j-core >=0.22.7` (vorher `0.22.6`, `ElliottLogicProfile` fehlte dort noch,
-Compile-Fehler beim ersten Docker-Rebuild) - Rolf hebt `pom.xml` entsprechend an,
-Build-Ergebnis steht zum Sessionende noch aus. `BullishIndicator.java` und
-`BearishIndicator.java` entsprechend umgebaut (`selectDegree`, `analyze`,
-`selectScenario` jetzt auf `ElliottScenarioSet` statt `ElliottWaveFacade`).
+**Zuletzt geändert:** 2026-08-03
+**Zuletzt bearbeitet von Claude:** Nach dem `ta4j-core`-0.22.7-Upgrade (Build
+verifiziert) intensive Praxistest-Runde mit Rolf über mehrere Sessions (01.-
+03.08.): DAX-/Dow-Jones-Komplettläufe zeigten zunächst zwei mutmaßliche
+Datenfehler (falsche Kurse, falscher Stage-Text bei ENR/HOT/CON), die sich
+nach ausführlicher Fehlersuche (DB-Daten korrekt, `agent-service-java`-Code
+korrekt, rohe Yahoo-API korrekt) letztlich als konsistenter, reproduzierbarer
+`yfinance`/`curl_cffi`-Bug entpuppten (nicht in unserem Code lokalisierbar,
+Update auf `yfinance 1.5.2` half nicht) - ungelöst, siehe `yahoo-service`.
+Danach IFX-Praxisfall bearbeitet: gleiches Strukturproblem wie DIS, gelöst über
+neuen separaten `ELLIOTT_LOOKBACK` (230 Tage) statt der viel aufwändigeren
+`ElliottWaveMacroCycleDemo`-Engine (~2600 Zeilen Beispielcode gesichtet, bewusst
+nicht portiert). Nebenbei: `ElliottAnalysisSupport` in `ElliottAnalysisUtil`
+umbenannt und aus `BearishIndicator` in eigene Klasse ausgelagert;
+`describeStage()` auf kompakte "A-B-"/"1-2-"-Notation umgestellt statt
+Volltext; `describeTarget()` (Kursziel + eigene Retracement-Näherung) neu
+ergänzt; Frontend-Farblogik der Elliott-Wave-Spalte entfernt. Am 03.08.
+zusätzlich `hasStrongConsensus()`-Gate ergänzt (Status: evtl. vorläufig,
+Rolf noch unentschieden) und die "Confidence ist nicht Wahrscheinlichkeit"-
+Erkenntnis anhand eines GDAXI-Beispiels dokumentiert. Nächster geplanter
+Schritt ("Option C": Elliott-Chart-Thumbnail/Modal im Frontend) ist besprochen
+und entschieden, aber noch nicht begonnen - Rolf ist ab 03.08. für mehrere
+Tage unterwegs, Fortsetzung zeitlich offen.
 
 
 ---

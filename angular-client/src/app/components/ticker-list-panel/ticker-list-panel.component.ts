@@ -15,6 +15,14 @@ import {
 export interface ListSelection {
   tickers: string[];
   source: DataSource;
+  /**
+   * Resolved-Ticker → displayName (siehe TickerSymbol.displayName), nur für
+   * Symbole mit gesetztem Namen. Dient als Fallback-Namensquelle im
+   * Frontend für Daten-Services, die selbst keinen Firmennamen liefern
+   * (aktuell: twelvedata-service - liefert Kurse+Währung, aber keinen
+   * Namen, siehe stock-platform CLAUDE.md).
+   */
+  displayNames: Record<string, string>;
 }
 
 @Component({
@@ -222,7 +230,14 @@ export class TickerListPanelComponent implements OnInit {
         const tickers = detail.symbols.map((s) =>
           toYahooSymbol(s.rawSymbol, detail.tickerFormat, detail.customSuffix)
         );
-        this.listSelected.emit({ tickers, source: list.source });
+        const displayNames: Record<string, string> = {};
+        detail.symbols.forEach((s) => {
+          const resolved = toYahooSymbol(s.rawSymbol, detail.tickerFormat, detail.customSuffix);
+          if (s.displayName) {
+            displayNames[resolved] = s.displayName;
+          }
+        });
+        this.listSelected.emit({ tickers, source: list.source, displayNames });
       },
       error: () => this.errorMsg.set('Symbole konnten nicht geladen werden'),
     });

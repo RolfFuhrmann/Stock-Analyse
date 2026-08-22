@@ -16,7 +16,7 @@ Microservice architecture with SSE push per ticker and XGBoost‑based AI revers
 3. Data service streams data per ticker immediately after retrieval (with delay).
 4. Agent performs rule‑based analysis (Elliott Wave · MACD · Stochastic · Candlestick Patterns) and requests the AI reversal signal from the ML Service in parallel.
 5. Angular displays each ticker immediately after processing.
-
+ng build
 ---
 
 ## VPN Gateway & Anti‑Blocking (Yahoo Finance)

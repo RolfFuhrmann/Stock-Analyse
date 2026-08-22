@@ -104,9 +104,9 @@ import { DataSource, FilterState, Interval, INTERVAL_LABELS, INTERVAL_LOOKBACK }
                   [disabled]="loading() || tickerCount() === 0"
                   matTooltip="Analyse für alle Ticker starten">
             @if (loading()) {
-              <mat-icon class="spin-icon">sync</mat-icon> Analyse läuft…
+              <ng-container><mat-icon class="spin-icon">sync</mat-icon> Analyse läuft…</ng-container>
             } @else {
-              <mat-icon>analytics</mat-icon> Analyse starten
+              <ng-container><mat-icon>analytics</mat-icon> Analyse starten</ng-container>
             }
           </button>
 

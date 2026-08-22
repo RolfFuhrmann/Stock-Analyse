@@ -1,0 +1,34 @@
+server:
+  port: 8016 # Port für den neuen Java-Agent
+spring:
+  application:
+    name: agent-service-java
+  codec:
+    max-in-memory-size: 10MB # Für große SSE-Payloads von Yahoo/TwelveData
+
+# Service-URLs – überschreibbar per Umgebungsvariable in docker-compose.yml
+services:
+  yahoo-url: ${YAHOO_SERVICE_URL:http://yahoo-service:8011}
+  twelvedata-url: ${TWELVEDATA_SERVICE_URL:http://twelvedata-service:8012}
+  ml-url: ${ML_SERVICE_URL:http://ml-service:8015}
+  db-url: ${DB_SERVICE_URL:http://db-service:8013}
+
+# Analyse-Konfiguration
+analysis:
+  lookback-days:
+    1d: 90
+    4h: 180
+    1h: 200
+  ml-lookback-days:
+    1d: 300
+    4h: 300
+    1h: 300
+  ml-timeout-seconds: 5
+  db-timeout-seconds: 10
+
+logging:
+  level:
+    rf.stock.agent: INFO
+    rf.stock.agent.indicator.BullishIndicator: DEBUG # zeigt Peak/A/B/C bei erkanntem A-B-C
+    rf.stock.agent.indicator.BearishIndicator: DEBUG # zeigt Peak/W0-W5 bei erkanntem 1-2-3-4-5
+    org.springframework.web.reactive: WARN
