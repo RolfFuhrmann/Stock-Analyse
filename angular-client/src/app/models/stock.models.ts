@@ -17,6 +17,8 @@ export const INTERVAL_LOOKBACK: Record<Interval, number> = {
 export interface StockResult {
   ticker: string;
   name: string | null;
+  /** ISO-4217-Code (z.B. "USD", "EUR"), null falls der Daten-Service keine Währung liefert. */
+  currency: string | null;
   interval: '1d' | '4h' | '1h';
   current_price: number | null;
   trend_pct: number | null;
@@ -39,6 +41,12 @@ export interface StockResult {
    * wurde (z.B. zu wenig Datenpunkte).
    */
   elliott_wave_stage: string;
+  /**
+   * Bars/Swings/Zielpreis der ta4j-Elliott-Analyse für die Chart-
+   * Visualisierung (Thumbnail + Modal). null, wenn ta4j kein Szenario
+   * gefunden hat (z.B. zu wenig Datenpunkte) - unabhängig von elliott_wave.
+   */
+  elliott_chart: ElliottChartData | null;
   stochastic: boolean;
   macd_histogram: boolean;
   criteria_met: number;
@@ -53,6 +61,36 @@ export interface StockResult {
   ml_available:   boolean;
   // ───────────────────────────────────────────────────────
   error: string | null;
+}
+
+// ── Elliott-Wave-Chart ("Option C") ──────────────────────
+
+export interface ElliottChartBar {
+  date: string;
+  open: number;
+  high: number;
+  low: number;
+  close: number;
+  volume: number | null;
+}
+
+export interface ElliottSwingPoint {
+  label: string;
+  from_date: string;
+  from_price: number;
+  to_date: string;
+  to_price: number;
+}
+
+export interface ElliottTarget {
+  price: number;
+  retracement_pct: number | null;
+}
+
+export interface ElliottChartData {
+  bars: ElliottChartBar[];
+  swings: ElliottSwingPoint[];
+  target: ElliottTarget | null;
 }
 
 export interface FilterState {

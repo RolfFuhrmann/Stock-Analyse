@@ -129,6 +129,8 @@ export class AppComponent implements OnDestroy {
   readonly showPanel       = computed(() => !this.loading() && this.results().length === 0);
   readonly selectedTickers = signal<string[]>([]);
   readonly selectedSource  = signal<DataSource | null>(null);
+  /** Fallback-Namensquelle für Daten-Services ohne eigene Namensauskunft (siehe ListSelection.displayNames). */
+  readonly listDisplayNames = signal<Record<string, string>>({});
   readonly listToEdit      = signal<TickerList | null>(null);
   readonly editorIsNew     = signal(false);
 
@@ -184,6 +186,25 @@ export class AppComponent implements OnDestroy {
   onListSelected(selection: ListSelection): void {
     this.selectedTickers.set(selection.tickers);
     this.selectedSource.set(selection.source);
+    this.listDisplayNames.set(selection.displayNames);
+  }
+
+  /**
+   * Füllt result.name mit dem in der Abrufliste hinterlegten displayName,
+   * falls der Daten-Service selbst keinen (echten) Namen liefert (aktuell
+   * betrifft das twelvedata-service - liefert Kurse+Währung, aber keinen
+   * Firmennamen, siehe stock-platform CLAUDE.md). Greift auch dann, wenn
+   * ein Daten-Service den Ticker selbst schon als "Name" zurückgibt (kein
+   * echter Mehrwert ggü. der Ticker-Spalte) - nur ein NAME, der sich vom
+   * Ticker unterscheidet, gilt als "echt" und bleibt unangetastet.
+   */
+  private withFallbackName(result: StockResult): StockResult {
+    const hasRealName = !!result.name && result.name !== result.ticker;
+    if (hasRealName) {
+      return result;
+    }
+    const fallback = this.listDisplayNames()[result.ticker];
+    return fallback ? { ...result, name: fallback } : result;
   }
 
   onEditList(list: TickerList): void {
@@ -225,7 +246,7 @@ export class AppComponent implements OnDestroy {
     this._subscription = this.analysisService
       .streamAnalysis(filter.tickers, filter.source, filter.interval, filter.lookbackDays)
       .subscribe({
-        next:     (result) => this.results.update((prev) => [...prev, result]),
+        next:     (result) => this.results.update((prev) => [...prev, this.withFallbackName(result)]),
         error:    (err)    => {
           this.error.set(`Fehler: ${err.message ?? 'Agent nicht erreichbar'}`);
           this.loading.set(false);

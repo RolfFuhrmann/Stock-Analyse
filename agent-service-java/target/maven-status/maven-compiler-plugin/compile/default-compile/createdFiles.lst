@@ -9,9 +9,9 @@ rf/stock/agent/controller/AgentController$StopRequest.class
 rf/stock/agent/service/DbClient$DbBar.class
 rf/stock/agent/service/AnalysisService.class
 rf/stock/agent/config/WebConfig.class
+rf/stock/agent/indicator/ElliottAnalysisUtil$1.class
 rf/stock/agent/model/IndicatorResult.class
 rf/stock/agent/model/AnalyzeRequest.class
-rf/stock/agent/indicator/BearishIndicator$ElliottCheckResult.class
 rf/stock/agent/service/MlClient$MlSignal.class
 rf/stock/agent/controller/AgentController.class
 rf/stock/agent/service/DbClient.class
@@ -21,7 +21,6 @@ rf/stock/agent/indicator/BearishIndicator.class
 rf/stock/agent/candle/BearishCandlePatterns.class
 rf/stock/agent/AgentServiceApplication.class
 rf/stock/agent/service/MlClient.class
-rf/stock/agent/indicator/BearishIndicator$1.class
 rf/stock/agent/candle/CandleUtils.class
 rf/stock/agent/model/TickerQuote.class
 rf/stock/agent/model/CandlePatternResult.class

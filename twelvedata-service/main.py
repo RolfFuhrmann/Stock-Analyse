@@ -69,6 +69,7 @@ class OHLCVBar(BaseModel):
 class TickerQuote(BaseModel):
     ticker: str
     bars: list[OHLCVBar]
+    currency: str | None = None
     error: str | None = None
 
 
@@ -108,6 +109,14 @@ async def fetch_ticker(
             logger.warning(f"{ticker} [{interval}]: {msg}")
             return TickerQuote(ticker=ticker, bars=[], error=msg)
 
+        # meta stammt aus derselben time_series-Antwort (kein zusätzlicher
+        # API-Call, also kein zusätzlicher Verbrauch des knappen Free-Plan-
+        # Kontingents) und liefert den ISO-4217-Währungscode des Symbols.
+        # Einen Firmennamen liefert dieser Endpunkt NICHT - dafür bräuchte es
+        # einen separaten /quote-Aufruf pro Ticker, der das Rate-Limit
+        # (Free Plan: 8 Requests/Minute) verdoppeln würde.
+        currency = data.get("meta", {}).get("currency")
+
         bars = []
         for v in data["values"]:
             try:
@@ -123,7 +132,7 @@ async def fetch_ticker(
                 continue
 
         logger.info(f"{ticker} [{interval}]: {len(bars)} Bars geladen")
-        return TickerQuote(ticker=ticker, bars=bars)
+        return TickerQuote(ticker=ticker, bars=bars, currency=currency)
 
     except httpx.HTTPError as e:
         logger.error(f"{ticker}: HTTP-Fehler – {e}")

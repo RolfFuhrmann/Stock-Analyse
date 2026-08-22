@@ -7,8 +7,12 @@
 /Users/rolf/Documents/Projekte/Entwicklung/Stock Analyse/agent-service-java/src/main/java/rf/stock/agent/controller/AgentController.java
 /Users/rolf/Documents/Projekte/Entwicklung/Stock Analyse/agent-service-java/src/main/java/rf/stock/agent/indicator/BearishIndicator.java
 /Users/rolf/Documents/Projekte/Entwicklung/Stock Analyse/agent-service-java/src/main/java/rf/stock/agent/indicator/BullishIndicator.java
+/Users/rolf/Documents/Projekte/Entwicklung/Stock Analyse/agent-service-java/src/main/java/rf/stock/agent/indicator/ElliottAnalysisUtil.java
 /Users/rolf/Documents/Projekte/Entwicklung/Stock Analyse/agent-service-java/src/main/java/rf/stock/agent/model/AnalyzeRequest.java
 /Users/rolf/Documents/Projekte/Entwicklung/Stock Analyse/agent-service-java/src/main/java/rf/stock/agent/model/CandlePatternResult.java
+/Users/rolf/Documents/Projekte/Entwicklung/Stock Analyse/agent-service-java/src/main/java/rf/stock/agent/model/ElliottChartData.java
+/Users/rolf/Documents/Projekte/Entwicklung/Stock Analyse/agent-service-java/src/main/java/rf/stock/agent/model/ElliottSwingPoint.java
+/Users/rolf/Documents/Projekte/Entwicklung/Stock Analyse/agent-service-java/src/main/java/rf/stock/agent/model/ElliottTarget.java
 /Users/rolf/Documents/Projekte/Entwicklung/Stock Analyse/agent-service-java/src/main/java/rf/stock/agent/model/IndicatorResult.java
 /Users/rolf/Documents/Projekte/Entwicklung/Stock Analyse/agent-service-java/src/main/java/rf/stock/agent/model/OhlcvBar.java
 /Users/rolf/Documents/Projekte/Entwicklung/Stock Analyse/agent-service-java/src/main/java/rf/stock/agent/model/StockResult.java

@@ -1,5 +1,6 @@
 import { Injectable } from '@angular/core';
-import { StockResult, AnalysisSummary } from '../models/stock.models';
+import { StockResult, AnalysisSummary, ElliottChartData } from '../models/stock.models';
+import { currencySymbol } from '../shared/currency.util';
 
 /**
  * PdfExportService
@@ -64,8 +65,10 @@ export class PdfExportService {
     .badge { display: inline-block; padding: 2px 8px; border-radius: 20px; font-size: 9px; font-weight: 600; }
     .badge-true  { background: #dcfce7; color: #166534; }
     .badge-false { background: #f3f4f6; color: #6b7280; }
+    /* Elliott Wave: bewusst KEINE Grün/Grau-Unterscheidung (wie ResultsTableComponent.elliottWaveBadgeClass())
+       - Konfidenz/Vollständigkeit steht bereits im Label-Text ("A-B-" vs. "A-B-C"), Farbe würde das duplizieren. */
+    .badge-elliott { background: #f3f4f6; color: #1a1f2e; border: 1px solid #e5e7eb; font-family: 'SF Mono', Monaco, monospace; }
     .badge-bearish { background: #fee2e2; color: #991b1b; }
-    .badge-progress { background: #f3f4f6; color: #6b7280; font-weight: 500; }
     .score-3 { background: #dcfce7; color: #166534; }
     .score-2 { background: #fef9c3; color: #854d0e; }
     .score-1, .score-0 { background: #f3f4f6; color: #9ca3af; }
@@ -81,6 +84,8 @@ export class PdfExportService {
     .candle-s3 { background: #dbeafe; color: #1e40af; }
     .candle-s2 { background: #dcfce7; color: #166534; }
     .candle-s1 { background: #f3f4f6; color: #374151; }
+    .chart-svg { display: block; }
+    .chart-empty { color: #9ca3af; }
     .footer { margin-top: 20px; font-size: 9px; color: #9ca3af; border-top: 1px solid #e5e7eb; padding-top: 10px; }
     @media print { body { padding: 0; } }
   </style>
@@ -108,14 +113,17 @@ export class PdfExportService {
     <thead>
       <tr>
         <th class="th-left">Basiswert</th>
+        <th class="th-left">Name</th>
         <th class="th-right">Kurs</th>
         <th class="th-right">Trend</th>
         <th>Elliott Wave</th>
+        <th>Chart</th>
         <th>Richtung</th>
         <th>Stochastik</th>
         <th>MACD-Histogramm</th>
         <th>Score</th>
-        <th class="th-left">Umkehrformation</th>
+        <th class="th-left">Candlestick Pattern</th>
+        <th>KI-Signal</th>
       </tr>
     </thead>
     <tbody>
@@ -132,7 +140,9 @@ export class PdfExportService {
 
   private buildRow(r: StockResult): string {
     const rowClass = r.criteria_met === 3 ? 'row-all3' : r.criteria_met === 2 ? 'row-2of3' : '';
-    const price    = r.current_price != null ? `$ ${r.current_price.toFixed(2)}` : '–';
+    const price    = r.current_price != null
+      ? `${currencySymbol(r.currency, r.ticker)} ${r.current_price.toFixed(2)}`
+      : '–';
     const trend    = r.trend_pct != null
       ? `<span class="${r.trend_pct >= 0 ? 'pos' : 'neg'}">${r.trend_pct >= 0 ? '+' : ''}${r.trend_pct.toFixed(1)}%</span>`
       : '–';
@@ -144,8 +154,9 @@ export class PdfExportService {
         ? (r.trend_direction === 'bearish' ? 'A-B-C' : r.trend_direction === 'bullish' ? '1-2-3-4-5' : '')
         : '';
     const elliott  = elliottLabel
-      ? `<span class="badge ${r.elliott_wave ? 'badge-true' : 'badge-progress'}">${elliottLabel}</span>`
+      ? `<span class="badge badge-elliott">${elliottLabel}</span>`
       : '–';
+    const chart    = this.buildChartSvg(r.elliott_chart);
     const direction = r.macd_stoch_direction === 'bullish'
       ? `<span class="badge badge-true">▲ Bullish</span>`
       : r.macd_stoch_direction === 'bearish'
@@ -163,9 +174,11 @@ export class PdfExportService {
 
     return `<tr class="${rowClass}">
       <td><span class="ticker-name">${r.ticker}</span>${r.error ? `<div style="color:#ef4444;font-size:9px">${r.error}</div>` : ''}</td>
+      <td class="td-left">${r.name ?? '–'}</td>
       <td class="td-right">${price}</td>
       <td class="td-right">${trend}</td>
       <td class="td-center">${elliott}</td>
+      <td class="td-center">${chart}</td>
       <td class="td-center">${direction}</td>
       <td class="td-center">${badge(r.stochastic)}</td>
       <td class="td-center">${badge(r.macd_histogram)}</td>
@@ -173,5 +186,69 @@ export class PdfExportService {
       <td class="td-left">${candle}</td>
       <td class="td-center">${ml}</td>
     </tr>`;
+  }
+
+  /**
+   * Statisches SVG (Kerzen + Wellen-Zickzack-Linie) als Chart-Vorschau fürs
+   * PDF - kein lightweight-charts, da das Druckfenster ein separates
+   * document.write()-Dokument ist und das asynchrone Laden/Rendern einer
+   * JS-Chart-Bibliothek dort nicht zuverlässig vor window.print() fertig
+   * würde. Bildlich dieselbe Idee wie ElliottChartThumbnailComponent auf dem
+   * Bildschirm (Kerzen + blaue Zickzack-Linie über den erkannten Swings),
+   * aber als reines, sofort druckbares Markup.
+   */
+  private buildChartSvg(chart: ElliottChartData | null): string {
+    if (!chart || !chart.bars || chart.bars.length === 0) {
+      return '<span class="chart-empty">–</span>';
+    }
+
+    const width = 92;
+    const height = 30;
+    const padding = 2;
+    const bars = chart.bars;
+
+    const min = Math.min(...bars.map((b) => b.low));
+    const max = Math.max(...bars.map((b) => b.high));
+    const range = max - min || 1;
+    const slot = width / bars.length;
+    const candleWidth = Math.max(1, Math.min(3, slot * 0.6));
+    const y = (v: number) => height - padding - ((v - min) / range) * (height - padding * 2);
+
+    const dateToIndex = new Map<string, number>();
+    bars.forEach((b, i) => dateToIndex.set(b.date, i));
+
+    const candles = bars
+      .map((b, i) => {
+        const x = i * slot + slot / 2;
+        const color = b.close >= b.open ? '#16a34a' : '#dc2626';
+        const bodyTop = y(Math.max(b.open, b.close));
+        const bodyBottom = y(Math.min(b.open, b.close));
+        const bodyHeight = Math.max(0.6, bodyBottom - bodyTop);
+        return (
+          `<line x1="${x}" y1="${y(b.high)}" x2="${x}" y2="${y(b.low)}" stroke="${color}" stroke-width="0.6"/>` +
+          `<rect x="${x - candleWidth / 2}" y="${bodyTop}" width="${candleWidth}" height="${bodyHeight}" fill="${color}"/>`
+        );
+      })
+      .join('');
+
+    let zigzag = '';
+    if (chart.swings.length > 0) {
+      const points: string[] = [];
+      const firstIdx = dateToIndex.get(chart.swings[0].from_date);
+      if (firstIdx !== undefined) {
+        points.push(`${firstIdx * slot + slot / 2},${y(chart.swings[0].from_price)}`);
+      }
+      for (const swing of chart.swings) {
+        const idx = dateToIndex.get(swing.to_date);
+        if (idx !== undefined) {
+          points.push(`${idx * slot + slot / 2},${y(swing.to_price)}`);
+        }
+      }
+      if (points.length > 1) {
+        zigzag = `<polyline points="${points.join(' ')}" fill="none" stroke="#2563eb" stroke-width="1.2"/>`;
+      }
+    }
+
+    return `<svg class="chart-svg" viewBox="0 0 ${width} ${height}" width="${width}" height="${height}">${candles}${zigzag}</svg>`;
   }
 }

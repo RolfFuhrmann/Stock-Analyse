@@ -63,6 +63,8 @@ class OHLCVBar(BaseModel):
 class TickerQuote(BaseModel):
     ticker: str
     bars: list[OHLCVBar]
+    longName: str | None = None
+    currency: str | None = None
     error: str | None = None
 
 
@@ -100,6 +102,15 @@ def fetch_ohlcv(ticker: str, outputsize: int, interval: str = "1d") -> TickerQuo
 
             if df.empty or len(df) < min_rows:
                 return TickerQuote(ticker=ticker, bars=[], error="Keine ausreichenden Daten")
+
+            # history_metadata stammt aus derselben Chart-Antwort wie history()
+            # (kein zusätzlicher Yahoo-Request, also kein zusätzliches
+            # Rate-Limit-Risiko) und liefert u.a. Firmennamen + ISO-4217-
+            # Währungscode. .get() statt Attributzugriff, da einzelne Felder
+            # je nach Instrument (z.B. Indizes) fehlen können.
+            meta = ticker_obj.history_metadata or {}
+            long_name = meta.get("longName") or meta.get("shortName")
+            currency = meta.get("currency")
 
             if isinstance(df.columns, pd.MultiIndex):
                 df.columns = [c.lower() for c in df.columns]
@@ -140,7 +151,7 @@ def fetch_ohlcv(ticker: str, outputsize: int, interval: str = "1d") -> TickerQuo
                 ]
 
             logger.info(f"{ticker}: {len(bars)} Bars geladen (interval={interval}, period={period})")
-            return TickerQuote(ticker=ticker, bars=bars)
+            return TickerQuote(ticker=ticker, bars=bars, longName=long_name, currency=currency)
 
         except Exception as e:
             err = str(e)
