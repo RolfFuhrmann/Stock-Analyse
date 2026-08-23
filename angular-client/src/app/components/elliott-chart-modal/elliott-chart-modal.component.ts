@@ -3,7 +3,7 @@ import { AfterViewInit, Component, ElementRef, Inject, OnDestroy, ViewChild } fr
 import { MatButtonModule } from '@angular/material/button';
 import { MAT_DIALOG_DATA, MatDialogModule, MatDialogRef } from '@angular/material/dialog';
 import { MatIconModule } from '@angular/material/icon';
-import { ColorType, IChartApi, LineStyle, createChart } from 'lightweight-charts';
+import type { IChartApi } from 'lightweight-charts';
 import { ElliottChartData } from '../../models/stock.models';
 import { barsToCandlestickData, swingsToZigzagLine, toChartTime } from '../../shared/elliott-chart.util';
 
@@ -112,8 +112,14 @@ export class ElliottChartModalComponent implements AfterViewInit, OnDestroy {
     @Inject(MAT_DIALOG_DATA) public data: ElliottChartModalData,
   ) {}
 
-  ngAfterViewInit(): void {
+  /**
+   * lightweight-charts wird per dynamischem Import nachgeladen (wie im
+   * Thumbnail, siehe dort) - landet dadurch in einem separaten, lazy-
+   * geladenen Chunk statt im initialen Bundle.
+   */
+  async ngAfterViewInit(): Promise<void> {
     const el = this.containerRef.nativeElement;
+    const { createChart, ColorType, LineStyle } = await import('lightweight-charts');
 
     this.chart = createChart(el, {
       width: el.clientWidth,

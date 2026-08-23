@@ -90,8 +90,8 @@ import { DataSource, FilterState, Interval, INTERVAL_LABELS, INTERVAL_LOOKBACK }
           <mat-form-field appearance="outline" class="lookback-field">
             <input matInput type="number"
                    [ngModel]="lookbackDays()"
-                   (ngModelChange)="lookbackDays.set(+$event)"
-                   min="30" max="365" [disabled]="loading()" />
+                   disabled
+                   matTooltip="Automatisch synchron zum Elliott-Wave-Lookback im Backend - nicht editierbar, um Verwechslung mit einem eigenen, unabhängigen Analysezeitraum zu vermeiden" />
           </mat-form-field>
         </div>
 
@@ -205,7 +205,17 @@ export class FilterHeaderComponent implements OnChanges {
   readonly source       = signal<DataSource>('yahoo');
   readonly interval     = signal<Interval>('1d');
   readonly tickerInput  = signal('AAPL, MSFT, JPM');
-  readonly lookbackDays = signal(90);
+  /**
+   * Default synchron zu ELLIOTT_LOOKBACK_BY_INTERVAL["1d"] in
+   * agent-service-java (aktuell 230). Wichtig: dieser Wert gated NICHT die
+   * Elliott-Wave-Erkennung selbst - das Backend holt sich über
+   * Math.max(lookback, elliottLookback)+40 ohnehin immer mindestens den
+   * eigenen elliottLookback-Wert an Kerzen, unabhängig davon, was der
+   * Client hier schickt. Er bestimmt nur das Fenster für die Trend%-Spalte
+   * (AnalysisService.analyseQuote()) - 230 sorgt dafür, dass Trend% über
+   * denselben Zeitraum rechnet, den auch die Elliott-Analyse betrachtet.
+   */
+  readonly lookbackDays = signal(230);
 
   readonly intervalLabels = INTERVAL_LABELS;
 

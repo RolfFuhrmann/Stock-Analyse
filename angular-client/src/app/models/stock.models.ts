@@ -9,7 +9,7 @@ export const INTERVAL_LABELS: Record<Interval, string> = {
 };
 
 export const INTERVAL_LOOKBACK: Record<Interval, number> = {
-  '1d': 90,
+  '1d': 230, // synchron zu ELLIOTT_LOOKBACK_BY_INTERVAL["1d"] in agent-service-java (siehe filter-header.component.ts)
   '4h': 180,
   '1h': 200,
 };
