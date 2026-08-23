@@ -11,7 +11,7 @@ import {
   output,
 } from '@angular/core';
 import { MatTooltipModule } from '@angular/material/tooltip';
-import { ColorType, IChartApi, createChart } from 'lightweight-charts';
+import type { IChartApi } from 'lightweight-charts';
 import { ElliottChartData } from '../../models/stock.models';
 import { barsToCandlestickData, swingsToZigzagLine } from '../../shared/elliott-chart.util';
 
@@ -65,12 +65,12 @@ export class ElliottChartThumbnailComponent implements AfterViewInit, OnChanges,
 
   ngAfterViewInit(): void {
     this.viewReady = true;
-    this.render();
+    void this.render();
   }
 
   ngOnChanges(changes: SimpleChanges): void {
     if (changes['data'] && this.viewReady) {
-      this.render();
+      void this.render();
     }
   }
 
@@ -78,12 +78,27 @@ export class ElliottChartThumbnailComponent implements AfterViewInit, OnChanges,
     this.chart?.remove();
   }
 
-  private render(): void {
+  /**
+   * lightweight-charts wird per dynamischem Import nachgeladen statt statisch
+   * importiert - dadurch landet die Bibliothek in einem separaten,
+   * lazy-geladenen Chunk statt im initialen Bundle (das erst beim App-Start
+   * geladen wird, lange bevor überhaupt Ergebnisse mit Chart-Daten existieren).
+   * Reduziert das initiale Bundle spürbar (siehe angular.json-Budget).
+   */
+  private async render(): Promise<void> {
     const chartData = this.data();
     const el = this.containerRef?.nativeElement;
     if (!chartData || !el || chartData.bars.length === 0) {
       this.chart?.remove();
       this.chart = undefined;
+      return;
+    }
+
+    const { createChart, ColorType } = await import('lightweight-charts');
+
+    // Zwischen Start des Imports und Auflösung könnte data() sich geändert
+    // haben oder die Komponente zerstört worden sein - erneut prüfen.
+    if (this.data() !== chartData || !this.containerRef) {
       return;
     }
 

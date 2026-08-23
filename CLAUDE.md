@@ -94,13 +94,18 @@ src/app/
 │   ├── results-table/      # Scrollbare Ergebnistabelle, Header eingefroren
 │   ├── criteria-filter/    # Score-Filter (0–3 Kriterien)
 │   ├── ticker-list-panel/  # Ticker-Listen aus DB anzeigen
-│   └── ticker-list-editor/ # Listen anlegen/bearbeiten
+│   ├── ticker-list-editor/ # Listen anlegen/bearbeiten
+│   ├── elliott-chart-thumbnail/ # Mini-Chart (Kerzen+Swings) in der Ergebnistabelle, öffnet Modal
+│   └── elliott-chart-modal/     # Großer Elliott-Wave-Chart (lightweight-charts), Wellen-Labels + Zielpreis-Linie
 ├── models/
-│   └── stock.models.ts     # StockResult (inkl. ML-Felder), FilterState, AnalysisSummary
+│   └── stock.models.ts     # StockResult (inkl. ML- + Elliott-Chart-Feldern), FilterState, AnalysisSummary
 ├── services/
 │   ├── analysis.service.ts   # SSE-Streaming
 │   ├── ticker-list.service.ts # REST-Calls zum DB-Service
-│   └── pdf-export.service.ts # PDF via Browser-Print (inkl. KI-Spalte)
+│   └── pdf-export.service.ts # PDF via Browser-Print (inkl. KI-Spalte, Name-Spalte, Chart-Spalte als statisches SVG)
+├── shared/
+│   ├── currency.util.ts       # Währungssymbol: bevorzugt StockResult.currency, Fallback auf Ticker-Suffix-Heuristik
+│   └── elliott-chart.util.ts  # Bars/Swings → lightweight-charts-Datenformate (von Thumbnail + Modal genutzt)
 └── app.component.ts          # Root: State (Signals) + Koordination
 ```
 
@@ -110,10 +115,18 @@ src/app/
 export interface StockResult {
   ticker: string;
   name: string | null;
+  /** ISO-4217-Code (z.B. "USD", "EUR"), direkt vom Daten-Service übernommen (siehe 3.3/3.4). null falls nicht geliefert. */
+  currency: string | null;
   current_price: number | null;
   trend_pct: number | null;
   trend_direction: 'bullish' | 'bearish' | null;
   elliott_wave: boolean;
+  /**
+   * Bars/Swings/Zielpreis für die Chart-Visualisierung ("Option C", 19.08.
+   * umgesetzt) - null, falls ta4j kein Szenario findet, unabhängig von
+   * elliott_wave (auch Zwischenstände werden angezeigt).
+   */
+  elliott_chart: ElliottChartData | null;
   stochastic: boolean;
   macd_histogram: boolean;
   criteria_met: number;         // 0–3
@@ -130,20 +143,84 @@ export interface StockResult {
 }
 ```
 
-**Elliott-Wave-Spalte in `results-table_component.ts` (02.08.):** Die frühere
-Farbunterscheidung (`elliott-confirmed` kräftig blau bei `elliott_wave=true`
-vs. `elliott-progress` gedeckt grau bei reinem Zwischenstand) wurde entfernt -
-Rolfs Wunsch nach einheitlichem Text (`#1a1f2e`, passend zur globalen
-Textfarbe aus `styles.scss`). Grund: seit die Backend-Stage-Notation nur noch
-vollendete Wellen kompakt zeigt (`"A-B-"`), fühlte sich die Farbunterscheidung
-redundant an. `elliottWaveBadgeClass()` dadurch auf parameterlos vereinfacht.
-Der `matTooltip` (bestätigt vs. Zwischenstand) blieb unverändert erhalten.
+**Elliott-Wave-Badge-Farblogik entfernt (02.08., seit 20.08. auch im PDF-Export
+konsistent):** Die frühere Farbunterscheidung (`elliott-confirmed` kräftig blau
+bei `elliott_wave=true` vs. `elliott-progress` gedeckt grau bei reinem
+Zwischenstand) wurde im Frontend entfernt - Rolfs Wunsch nach einheitlichem
+Text (`#1a1f2e`, passend zur globalen Textfarbe aus `styles.scss`). Grund: seit
+die Backend-Stage-Notation nur noch vollendete Wellen kompakt zeigt (`"A-B-"`),
+fühlte sich die Farbunterscheidung redundant an. `elliottWaveBadgeClass()`
+dadurch auf parameterlos vereinfacht. Der `matTooltip` (bestätigt vs.
+Zwischenstand) blieb unverändert erhalten. **PDF-Export hatte diese
+Vereinheitlichung zunächst nicht nachvollzogen** (zeigte noch grün/grau nach
+`elliott_wave`) - am 20.08. beim vollständigen PDF-Konsistenz-Check gegen den
+Screen gefunden und behoben (`.badge-elliott`, einheitlich).
 
-**Geplant, noch nicht begonnen ("Option C", siehe 3.2c):** `StockResult` soll
-um ein `elliottChart`-Feld erweitert werden (Bars + Swing-Punkte + Zielpreis
-des gewählten Szenarios), damit das Frontend selbst einen Wellen-Chart
-rendern kann (Thumbnail in neuer Spalte, Klick → Modal). Kandidat für die
-Chart-Bibliothek: `lightweight-charts` (TradingView).
+**Elliott-Wave-Chart-Visualisierung ("Option C", umgesetzt 19.08.):** Neue
+Spalte "Chart" in der Ergebnistabelle (`elliott-chart-thumbnail.component.ts`)
+- kleine, achsenlose `lightweight-charts`-Instanz (Kerzen + blaue Zickzack-
+Linie über den erkannten Swings), Klick öffnet `elliott-chart-modal.component.ts`
+mit vollständigem Chart (Achsen, beschriftete Wellen-Marker A/B/C bzw. 1-5,
+gestrichelte Kursziel-Linie). Bibliothek: `lightweight-charts` v4.2 (damit
+entschieden - Option-C-Design-Fragen aus 3.2c sind erledigt). Backend liefert
+dafür `elliott_chart` (Bars des Elliott-Lookback-Fensters + Swing-Punkte +
+Kursziel) direkt im `StockResult`-JSON (`ElliottAnalysisUtil.buildChartData()`,
+siehe 3.2b). TradingView-Attributions-Logo im Thumbnail via
+`attributionLogo: false` ausgeblendet (zu klein für ein 92×32px-Thumbnail),
+im großen Modal-Chart bewusst sichtbar gelassen (Lizenz-Attribution).
+**Von Rolf im Praxistest bestätigt:** hilft sehr dabei, die von ta4j
+gefundenen Wellen tatsächlich nachzuvollziehen. **Noch offen:** bei sehr
+langen Ticker-Listen (DAX/Dow-Komplettläufe) noch nicht geprüft, ob viele
+einzelne Thumbnail-Chart-Instanzen performant bleiben - Alternative bei
+Bedarf: Sparkline-SVG statt echter Chart-Instanzen.
+
+**Währungsanzeige (19./20.08.):** `currencySymbol()` (jetzt in
+`shared/currency.util.ts`, von Tabelle UND PDF-Export genutzt) bevorzugt
+`StockResult.currency` vom Daten-Service (ISO-4217, z.B. "EUR"/"USD") und
+fällt nur noch auf die alte Ticker-Suffix-Heuristik (`.DE` → €, sonst $)
+zurück, falls ein Daten-Service keine Währung liefert. Grund: frei
+konfigurierbare Abruflisten können Werte aus verschiedenen Währungsräumen
+mischen, die reine Suffix-Heuristik lag dabei potenziell falsch (siehe 3.3/3.4).
+
+**Namens-Fallback für `twelvedata-service` (20.08.):** Da `twelvedata-service`
+keinen Firmennamen liefert (siehe 3.4), baut `ticker-list-panel.component.ts`
+beim Laden einer Liste eine `resolved-ticker → displayName`-Map aus den in der
+Abrufliste gepflegten `TickerSymbol.displayName`-Werten. `app.component.ts`
+wendet sie über `withFallbackName()` an, sobald ein SSE-Ergebnis ohne
+"echten" Namen zurückkommt (kein Name ODER Name === Ticker) - überschreibt
+nie einen bereits vorhandenen echten Namen vom Daten-Service (z.B. Yahoo
+`longName`). Rein clientseitig, kein neues Feld im Backend-API-Vertrag nötig.
+
+**PDF-Export-Konsistenz-Check (19./20.08.):** Vollständiger Abgleich
+`pdf-export.service.ts` gegen `results-table.component.ts` ergab drei weitere
+Abweichungen, alle behoben: (1) Preis nutzte im PDF immer `$` statt wie am
+Screen `currencySymbol()` - jetzt vereinheitlicht (siehe oben); (2)
+Spaltenüberschrift "Umkehrformation" widersprach sowohl dem Screen als auch
+der PDF-eigenen Fußzeile, die schon "Candlestick Pattern" sagte - vereinheitlicht;
+(3) eigene **Name-Spalte fehlte im PDF komplett** (nur Ticker/"Basiswert" war
+vorhanden) - ergänzt, an derselben Position wie am Screen (direkt nach
+"Basiswert"). Chart-Spalte im PDF ist reines SVG (`buildChartSvg()`), keine
+eingebettete `lightweight-charts`-Instanz - Grund: das Druckfenster ist ein
+separates `document.write()`-Dokument, in dem eine asynchron ladende
+JS-Chart-Bibliothek nicht zuverlässig vor `window.print()` fertig würde.
+
+**`lookbackDays`-Feld schreibgeschützt, Default 230 (23.08.):** War zuvor 90
+und editierbar - beides irreführend. `lookbackDays` gated die Elliott-Wave-
+Erkennung nicht (siehe 3.2b, `Math.max(lookback, elliottLookback)`), sondern
+nur das Fenster der Trend%-Spalte. `filter-header.component.ts` setzt das
+Feld daher jetzt `disabled` (Tooltip erklärt warum), `INTERVAL_LOOKBACK` in
+`stock.models.ts` ist auf `ELLIOTT_LOOKBACK_BY_INTERVAL` im Backend
+abgestimmt (`1d`→230, `4h`→180, `1h`→200).
+
+**Bundle-Größe / Docker-Build (22./23.08.):** `lightweight-charts` wird in
+`elliott-chart-thumbnail.component.ts` und `elliott-chart-modal.component.ts`
+per `await import('lightweight-charts')` statt statischem Import geladen -
+landet dadurch in einem separaten, lazy geladenen Chunk statt im initialen
+Bundle (das `angular.json`-Budget von 1.00 MB musste dafür nicht angehoben
+werden). Das `angular-client`-Dockerfile nutzt außerdem `npm install` statt
+`npm ci` (Grund: `package-lock.json` kann in Claudes Sandbox mangels
+Netzwerkzugriff nicht aktuell gehalten werden, `npm ci` bricht bei jeder
+Abweichung hart ab - siehe 7 für den Trade-off).
 
 ### 3.2 Agent Service (`agent-service/`)
 
@@ -222,11 +299,11 @@ Klassen nutzen: `selectDegree`, `analyze`, `selectScenario`, `describeStage`,
 `ElliottCheckResult`-Record, `MIN_CONFIDENCE`.
 
 - `BullishIndicator.checkElliottABC()` – erkennt abgeschlossene Abwärtskorrekturen
-  (Typ `CORRECTIVE`, Phase `CORRECTIVE_C`, Richtung bearish, Konfidenz ≥ `MIN_CONFIDENCE`,
-  **seit 03.08. zusätzlich `scenarioSet.hasStrongConsensus()` erforderlich** - siehe unten)
+  (Typ `CORRECTIVE`, Phase `CORRECTIVE_C`, Richtung bearish, Konfidenz ≥ `MIN_CONFIDENCE`.
+  **`scenarioSet.hasStrongConsensus()`-Zusatzbedingung (03.–19.08. testweise aktiv)
+  am 19.08. final wieder entfernt** - siehe unten)
 - `BearishIndicator.checkElliottImpulseUp()` – erkennt vollständige 5-Wellen-Impulse
-  aufwärts (Typ `IMPULSE`, Phase `WAVE5`, Richtung bullish, dieselben zusätzlichen
-  Bedingungen)
+  aufwärts (Typ `IMPULSE`, Phase `WAVE5`, Richtung bullish, dieselbe Bedingung)
 - **`ElliottAnalysisUtil.describeStage()` seit 01.08. komplett umgestellt**: statt
   vollständiger deutscher Sätze ("A-B abgeschlossen, C im Entstehen") jetzt
   **kompakte Notation nur der bereits VOLLENDETEN Wellen**, z.B. `"A-B-"` wenn
@@ -268,17 +345,17 @@ Klassen nutzen: `selectDegree`, `analyze`, `selectScenario`, `describeStage`,
   Indicator-Klassen nimmt seitdem nur noch `elliottLookback` entgegen - der
   alte allgemeine `lookback`-Parameter war dort ohnehin nie genutzt (MACD/
   Stochastik arbeiten immer auf der vollen `bars`-Liste) und wurde entfernt.
-- **`scenarioSet.hasStrongConsensus()` als zusätzliches Gate (03.08.)**: `genuine`
-  verlangt jetzt zusätzlich, dass sich die konkurrierenden Szenarien nicht
-  deutlich widersprechen. Grund: `confidence` allein kann irreführend sein
-  (siehe "Confidence vs. Probability" unten) - Konsens ist der günstigste
-  verfügbare Proxy dafür, ohne die große Makro-Engine zu brauchen.
-  `confidenceSpread()` wird zusätzlich fürs Debug-Log mitgeloggt (`Konsens=`,
-  `Spread=`). **WICHTIG, noch offen:** Rolf hat am 03.08. angemerkt, dass er
-  das evtl. **wieder rückgängig machen** möchte, nachdem er mehr Praxisfälle
-  gesehen hat - noch nicht entschieden, nur im Hinterkopf zu behalten. Vor
-  einem Revert: prüfen, wie viele bisher als `genuine=true` erkannte Fälle
-  durch das Konsens-Gate neu herausgefiltert werden.
+- **`scenarioSet.hasStrongConsensus()`-Gate: eingeführt 03.08., am 19.08. final
+  wieder entfernt.** War kurzzeitig eine zusätzliche Bedingung für `genuine`
+  (verlangte, dass sich die konkurrierenden Szenarien nicht deutlich
+  widersprechen; `confidenceSpread()` zusätzlich fürs Debug-Log mitgeloggt).
+  Grund für die Einführung: `confidence` allein kann irreführend sein (siehe
+  "Confidence vs. Probability" unten). **Rolf hat nach mehr Praxisfällen
+  entschieden, das Gate wieder zu entfernen** - hat sich in der Praxis nicht
+  bewährt, zu viele echte Treffer wurden herausgefiltert. Endgültige
+  Entscheidung, kein erneuter Versuch geplant. Beide Aufrufstellen
+  (`BullishIndicator.checkElliottABC()`, `BearishIndicator.checkElliottImpulseUp()`)
+  sowie die zugehörigen Konsens-/Spread-Logausgaben wieder entfernt.
 - **"Confidence" ist NICHT "Wahrscheinlichkeit" (Erkenntnis 03.08.)**: `confidence`
   (`ElliottScenario.confidence()`) ist ein reiner Struktur-Qualitätsscore für
   EIN Szenario für sich genommen (35% Fibonacci-Nähe, 20% Zeitproportionen,
@@ -379,8 +456,8 @@ offizieller ta4j-Wiki-Doku:**
 - **Ta4j selbst empfiehlt laut Wiki explizit, KEINE ta4j-eigenen Chart-Renderer
   in Produktivcode zu übernehmen**: *"Ta4j includes charting helpers, but
   you're not locked in - serialize to JSON and use any visualization stack you
-  prefer."* Bestätigt die Entscheidung für Option C bei der geplanten Frontend-
-  Visualisierung (siehe Roadmap).
+  prefer."* Bestätigt die Entscheidung für Option C bei der Frontend-
+  Visualisierung (umgesetzt, siehe 3.1).
 
 **Remote-Debugging (VS Code, JDWP):** `JAVA_TOOL_OPTIONS=-agentlib:jdwp=transport=dt_socket,server=y,suspend=n,address=*:5005`
 als Env-Var in `docker-compose.yml` beim `agent-service-java`-Service, Port
@@ -460,10 +537,8 @@ Breakpoints trotzdem greifen). Kein Rebuild nötig, nur `docker compose up -d`.
   verdrahtet.
 - **ta4j-Szenario wird doppelt berechnet** (einmal in `BullishIndicator`, einmal in
   `BearishIndicator`) – Zusammenlegung möglich, aber noch nicht umgesetzt.
-- **`hasStrongConsensus()`-Gate evtl. wieder rückgängig zu machen** (Stand 03.08.,
-  noch nicht entschieden) - Rolf will erst mehr Praxisfälle sammeln, bevor er
-  entscheidet, ob das Gate zu streng filtert. **Vor einem Revert prüfen:** wie
-  viele bisher als `genuine=true` erkannte Fälle fallen dadurch neu raus?
+- **`hasStrongConsensus()`-Gate: erledigt (19.08.)** - final wieder entfernt,
+  siehe 3.2b. Kein offener Punkt mehr.
 - **`RUNNER_MIN_CONFIDENCE = 0.15`, `MIN_CONFIDENCE = 0.6`, `HIGHER_DEGREES`/
   `LOWER_DEGREES = 1`, `ELLIOTT_LOOKBACK_BY_INTERVAL["1d"] = 230`** sind vom
   Praxistest mit dem ta4j-eigenen `ElliottWavePresetDemo` übernommen, aber noch
@@ -478,28 +553,78 @@ Breakpoints trotzdem greifen). Kein Rebuild nötig, nur `docker compose up -d`.
   Tickern wird nach einem längeren Abwärtstrend eine sehr kleinteilige
   Aufwärtsbewegung als Impuls ausgegeben - wirkt fragwürdig, noch nicht
   eingegrenzt, auf welche Fälle/Muster das zutrifft.
-- **Frontend-Elliott-Wave-Chart-Visualisierung ("Option C", geplant, noch NICHT
-  begonnen)**: Rolf möchte in einer neuen Spalte rechts von "Elliott Wave" ein
-  Thumbnail sehen (Kerzen + eingezeichnete Swing-Punkte des gewählten
-  Szenarios), Klick öffnet größer in einem Modal - um visuell nachvollziehen zu
-  können, wie ta4j die Wellenzählung setzt. Entscheidung bereits getroffen:
-  strukturierte Daten (Bars + Swing-Punkte + Zielpreis) ans Angular-Frontend
-  schicken, dort mit einer JS-Chart-Bibliothek rendern (Kandidat: TradingViews
-  `lightweight-charts`) - NICHT serverseitig JFreeChart-Bilder erzeugen
-  (Headless-Swing-Komplexität im Alpine-Docker-Container) und NICHT die
-  `ta4jexamples.charting`-Klassen wiederverwenden (Beispielcode-Kopplung, siehe
-  MacroCycleDemo-Engine oben). Offene Design-Fragen vor Implementierung:
-  (1) wie viele Bars pro Ticker/Request mitschicken (voller
-  `elliottLookback`-Bereich vs. nur ab `scenario.startIndex()` - Trade-off
-  gegen SSE-Payload-Größe bei großen Multi-Ticker-Läufen); (2) Bestätigung
-  `lightweight-charts` als Bibliothek. **Rolf ist ab 03.08. für mehrere Tage
-  unterwegs, unklar wann er weitermacht - das ist der nächste anstehende
-  Schritt, sobald es weitergeht.**
+- **Frontend-Elliott-Wave-Chart-Visualisierung ("Option C"): umgesetzt (19.08.),
+  siehe 3.1.** Kein offener Punkt mehr, außer der unten genannten Performance-
+  Frage bei sehr großen Listen.
+- **Candle-Pattern-Erkennung eventuell auf ta4j umstellen (Idee, 19.08., noch
+  nicht begonnen):** Rolf zieht in Erwägung, die eigenentwickelte
+  `BullishCandlePatterns`/`BearishCandlePatterns`-Erkennung durch ta4js
+  `org.ta4j.core.indicators.candles.*` zu ersetzen. Recherche-Ergebnis:
+  ta4j deckt Hammer, Morning Star, Bullish Engulfing und Piercing ab (direkte
+  Ersatzkandidaten), hat aber **kein "Abandoned Baby"** (aktuell unser
+  stärkstes Muster, Strength 5) - müsste weiter eigenentwickelt bleiben oder
+  entfallen. ta4js Trendkontext-Vorbedingung basiert auf **ADX/+DI/-DI**
+  (Schwellwert 25), unsere eigene `hasDowntrendBefore()` dagegen auf
+  bestätigten ZigZag-Schwüngen - strukturell verschieden, Treffermenge würde
+  sich vermutlich spürbar verschieben, nicht nur kosmetisch. Es gibt zudem
+  zwei ta4j-Implementierungen für Piercing (`PiercingIndicator` vs.
+  `PiercingLineIndicator`) und Dark Cloud (`DarkCloudIndicator` vs.
+  `DarkCloudCoverIndicator`) - Auswahl nötig. ta4j liefert außerdem kein
+  eingebautes Scoring/Priorisierung (nur `true`/`false` je Bar) - die
+  "erstes Match gewinnt"-Kaskade mit Stärke-Ranking (`CandlePatternResult`)
+  müsste weiterhin selbst darum herum gebaut werden. **Empfehlung an Rolf:**
+  erst den aktuell laufenden Elliott-Wellen-Praxistest abschließen, bevor eine
+  zweite bewegliche Komponente (Candle-Erkennung) gleichzeitig verändert wird.
+- **Build-Verifikation: erledigt (22.08.).** `mvn compile` (agent-service-java)
+  und `npm install && ng build` (angular-client) von Rolf lokal erfolgreich
+  durchlaufen. Kein offener Punkt mehr.
+- **`angular-client`-Dockerfile: `npm ci` → `npm install` (23.08.).** Claude
+  kann `package-lock.json` in seiner Sandbox nicht aktuell halten (kein
+  Netzwerkzugriff dort), daher weicht sie nach jeder neuen npm-Dependency in
+  `package.json` ab - `npm ci` bricht bei jeder Abweichung hart ab
+  (`EUSAGE`-Fehler beim Docker-Build), `npm install` gleicht sie stattdessen
+  automatisch ab. Trade-off: etwas weniger strikt reproduzierbar als
+  `npm ci`. Alternative, falls das wichtiger wird als der Komfort: Rolf
+  schickt nach einem lokalen `npm install` die aktualisierte
+  `package-lock.json` zurück, dann kann bei `npm ci` geblieben werden.
+- **`lightweight-charts` per dynamischem Import statt statisch importiert
+  (23.08.):** In `elliott-chart-thumbnail.component.ts` und
+  `elliott-chart-modal.component.ts` jetzt `await import('lightweight-charts')`
+  statt `import ... from 'lightweight-charts'` (nur noch `import type` für
+  Typen, keine Laufzeit-Bundle-Auswirkung). Grund: die Bibliothek landete
+  sonst im initialen Bundle und riss das `angular.json`-Budget (1.05 MB statt
+  1.00 MB); durch den dynamischen Import wird sie in einen separaten, erst
+  bei tatsächlichem Chart-Rendering lazy geladenen Chunk ausgelagert - Budget
+  konnte auf den ursprünglichen 1.00-MB-Wert zurückgesetzt werden. Nebenbei
+  zwei vorbestehende `NG8011`-Content-Projection-Warnungen in
+  `filter-header.component.ts` behoben (Icon+Text je in `<ng-container>`
+  gewrappt, unabhängig von den Chart-Änderungen).
+- **`lookbackDays`-Default im Client auf 230 synchronisiert und
+  nicht-editierbar gemacht (23.08.):** War zuvor 90 (Altwert), obwohl
+  `ELLIOTT_LOOKBACK_BY_INTERVAL["1d"]` im Backend längst 230 ist -
+  **Erkenntnis dabei: der Client-Wert gated die Elliott-Wave-Erkennung
+  ohnehin nicht** (`AnalysisService.analyzeFromSse()` bildet die tatsächlich
+  abgerufene Bar-Anzahl über `Math.max(lookback, elliottLookback) + 40`, der
+  Backend-eigene `elliottLookback` gewinnt also immer). Der Client-Wert
+  steuerte bisher nur das Fenster der Trend%-Spalte
+  (`AnalysisService.analyseQuote()`, `trendPct`). Um die Verwirrung zu
+  vermeiden, die ein editierbares, aber wirkungsloses Feld erzeugt hätte, ist
+  `lookbackDays` in `filter-header.component.ts` jetzt schreibgeschützt
+  (`disabled`, mit erklärendem Tooltip) und wird nur noch programmatisch
+  synchron zum jeweiligen Intervall gesetzt (`INTERVAL_LOOKBACK` in
+  `stock.models.ts`: `1d`→230, `4h`→180, `1h`→200 - deckungsgleich mit
+  `ELLIOTT_LOOKBACK_BY_INTERVAL` im Backend).
+- **Thumbnail-Chart-Performance bei sehr langen Ticker-Listen (DAX/Dow) noch
+  nicht geprüft:** jede Tabellenzeile mit `elliott_chart`-Daten bekommt eine
+  eigene echte `lightweight-charts`-Instanz als Thumbnail - bei Komplettläufen
+  eventueller Performance-Engpass, Alternative bei Bedarf: Sparkline-SVG.
 - **Klären: Python-`agent-service` (Port 8010) noch aktiv oder durch
   `agent-service-java` ersetzt?**
 - **`stock-data-db-access`: README/Doku für Java-25-Stand ergänzen**
 
 
+
+### 3.3 Yahoo Service (`yahoo-service/`)
 
 | Eigenschaft   | Wert                                              |
 | ------------- | ------------------------------------------------- |
@@ -515,6 +640,16 @@ Breakpoints trotzdem greifen). Kein Rebuild nötig, nur `docker compose up -d`.
 - `curl_cffi` imitiert Chrome-TLS-Fingerabdruck
 - Zufälliger Delay zwischen Tickern: 2.5–4.5 Sekunden
 - Automatische Retry-Logik bei Rate-Limit: 5s, 10s, 20s
+
+**Name + Währung im `TickerQuote` (19./20.08. ergänzt):** `longName` und
+`currency` (ISO-4217) werden aus `Ticker.history_metadata` gelesen - das steht
+nach dem ohnehin schon aufgerufenen `.history()` bereits im `yfinance`-Objekt,
+**kein zusätzlicher Yahoo-Request** und damit kein zusätzliches Rate-Limit-
+Risiko (das war zuvor der Grund, warum `TickerQuote` überhaupt nie einen
+Namen mitschickte - `agent-service-java`s Fallback-Kette `longName` →
+`shortName` → `name` war immer schon korrekt, lief nur ins Leere). `.get()`
+statt Attributzugriff, da einzelne Felder je nach Instrument (z.B. Indizes)
+fehlen können.
 
 ### 3.4 TwelveData Service (`twelvedata-service/`)
 
@@ -533,6 +668,15 @@ Breakpoints trotzdem greifen). Kein Rebuild nötig, nur `docker compose up -d`.
 - **Ohne `interval="1day"` liefert TwelveData Intraday-Daten → leeres `bars`-Array**
 
 **Rate-Limit:** Free Plan max 8 Requests/Minute → fixer Delay von 7.5s zwischen Tickern im Stream. Der History-Fetcher wartet zusätzlich 8s nach jedem einzelnen Request.
+
+**Währung im `TickerQuote` (20.08. ergänzt), kein Firmenname:** `currency`
+kommt kostenlos aus dem `meta`-Objekt, das die `time_series`-API ohnehin
+mitliefert (kein zusätzlicher Request). **Einen Firmennamen liefert dieser
+Endpunkt NICHT** - dafür bräuchte es einen separaten `/quote`-Aufruf pro
+Ticker, der das ohnehin knappe Free-Plan-Kontingent verdoppeln würde (bewusst
+NICHT eingebaut). Namens-Lücke wird stattdessen rein clientseitig über die
+`displayName`-Werte der Abrufliste geschlossen (siehe 3.1, "Namens-Fallback
+für `twelvedata-service`").
 
 ### 3.5 VPN Gateway (`vpn` / Gluetun)
 
@@ -771,53 +915,82 @@ docker logs -f stock_history_fetcher
       (`ELLIOTT_LOOKBACK_BY_INTERVAL["1d"]=230`) statt vollem Makro-Engine-Port
       - IFX-Praxistest bestätigte stabilen Zyklus-Anker über 200-1000 Tage
 - [x] `scenarioSet.hasStrongConsensus()` als zusätzliches Gate für `genuine`
-      ergänzt, `confidenceSpread()` mitgeloggt (Stand 03.08. - evtl. wieder
-      rückgängig zu machen, siehe 3.2c, noch nicht entschieden)
+      testweise ergänzt (03.08.) und **nach Praxiserfahrung final wieder
+      entfernt (19.08.)** - hat sich nicht bewährt, siehe 3.2b
 - [x] Elliott-Wave-Badge-Farblogik im Frontend entfernt (einheitliches Schwarz
-      statt blau/grau)
+      statt blau/grau) - seit 20.08. auch im PDF-Export konsistent
+- [x] **"Option C": Elliott-Wave-Chart-Thumbnail + Modal im Angular-Frontend
+      (19.08.)** - Backend liefert `elliott_chart` (Bars+Swings+Ziel) im
+      `StockResult`-JSON, Frontend rendert mit `lightweight-charts` v4.2
+      (Thumbnail in eigener Spalte, Klick → Modal mit beschrifteten
+      Wellen-Markern + Kursziel-Linie). Von Rolf im Praxistest bestätigt.
+- [x] PDF-Export-Konsistenz-Check gegen Screen (19./20.08.): Chart-Spalte
+      ergänzt (statisches SVG), Name-Spalte ergänzt (fehlte komplett),
+      Währungssymbol korrigiert, Spaltenüberschrift "Candlestick Pattern"
+      vereinheitlicht
+- [x] Echte Währung statt Ticker-Suffix-Heuristik (19./20.08.): `yahoo-service`
+      und `twelvedata-service` liefern jetzt beide `currency` (ISO-4217, ohne
+      zusätzlichen API-Call), durchgereicht bis in Tabelle + PDF
+      (`shared/currency.util.ts`)
+- [x] `yahoo-service` liefert jetzt `longName` (aus `history_metadata`, kein
+      zusätzlicher Request) - behebt fehlende Firmennamen bei Yahoo-Quotes
+- [x] Namens-Fallback für `twelvedata-service` über `displayName` der
+      Abrufliste (20.08., clientseitig, siehe 3.1) - TwelveData liefert selbst
+      keinen Firmennamen
+- [x] Build-Verifikation: `mvn compile` + `npm install && ng build` lokal von
+      Rolf erfolgreich durchlaufen (22.08.)
+- [x] `angular-client`-Dockerfile: `npm ci` → `npm install` (23.08.) - behebt
+      `EUSAGE`-Docker-Build-Abbruch durch veraltete `package-lock.json`
+- [x] `lightweight-charts` per dynamischem Import statt statisch importiert
+      (23.08.) - Bundle-Budget-Warnung behoben, ohne das Budget selbst
+      anzuheben; zwei vorbestehende `NG8011`-Warnungen in
+      `filter-header.component.ts` nebenbei behoben
+- [x] `lookbackDays`-Default im Client auf 230 synchronisiert und
+      nicht-editierbar gemacht (23.08.) - Erkenntnis dabei: der Wert gated
+      die Elliott-Wave-Erkennung ohnehin nicht (Backend-`Math.max`-Logik)
 - [ ] ta4j-Doppelberechnung (Bullish/Bearish) zusammenlegen
 - [ ] `RUNNER_MIN_CONFIDENCE`/`MIN_CONFIDENCE`/`HIGHER_DEGREES`/`LOWER_DEGREES`/
       `ELLIOTT_LOOKBACK` an mehreren Tickern (nicht nur DIS/IFX) nachkalibrieren
 - [ ] `describeTarget()`-Retracement-Prozentzahl an mehr Fällen (A/B/C, 1-2-3-4-5)
       validieren - Referenzwelle evtl. wellenpositionsabhängig anzupassen
-- [ ] `hasStrongConsensus()`-Gate: entscheiden ob beibehalten oder Revert (03.08.)
 - [ ] Elliott-Lookback/Outputsize-Einheiten sauber trennen (Kalendertage vs.
       Bar-Anzahl aktuell vermischt)
 - [ ] Praxisbeobachtung untersuchen: kleinteilige Aufwärtsbewegung nach langem
       Abwärtstrend wird manchmal als Impuls erkannt (Rolf, 03.08., noch nicht
       eingegrenzt)
-- [ ] **Nächster großer Schritt ("Option C"): Elliott-Wave-Chart-Thumbnail +
-      Modal im Angular-Frontend** - Backend liefert Bars+Swings+Ziel als JSON,
-      Frontend rendert mit `lightweight-charts` (Kandidat). Design-Fragen noch
-      offen (Bar-Menge im Payload, Bibliotheks-Bestätigung). **Rolf ist ab
-      03.08. mehrere Tage unterwegs - das ist der Wiedereinstiegspunkt.**
+- [ ] **Praxistest der Elliott-Wellen-Erkennung läuft (Rolf, ab 19.08.)** -
+      prüft anhand des neuen Charts, ob die von ta4j gefundenen Wellen
+      plausibel sind
+- [ ] **Idee, noch nicht begonnen: Candle-Pattern-Erkennung eventuell auf ta4j
+      umstellen** (Rolf, 19.08.) - siehe Recherche-Ergebnis + Empfehlung in
+      3.2c (erst Elliott-Praxistest abschließen)
+- [ ] Thumbnail-Chart-Performance bei sehr langen Ticker-Listen (DAX/Dow) noch
+      nicht geprüft
 - [ ] Klären: Python-`agent-service` (Port 8010) noch aktiv oder durch
       `agent-service-java` ersetzt?
 - [ ] `stock-data-db-access`: README/Doku für Java-25-Stand ergänzen
 
-**Zuletzt geändert:** 2026-08-03
-**Zuletzt bearbeitet von Claude:** Nach dem `ta4j-core`-0.22.7-Upgrade (Build
-verifiziert) intensive Praxistest-Runde mit Rolf über mehrere Sessions (01.-
-03.08.): DAX-/Dow-Jones-Komplettläufe zeigten zunächst zwei mutmaßliche
-Datenfehler (falsche Kurse, falscher Stage-Text bei ENR/HOT/CON), die sich
-nach ausführlicher Fehlersuche (DB-Daten korrekt, `agent-service-java`-Code
-korrekt, rohe Yahoo-API korrekt) letztlich als konsistenter, reproduzierbarer
-`yfinance`/`curl_cffi`-Bug entpuppten (nicht in unserem Code lokalisierbar,
-Update auf `yfinance 1.5.2` half nicht) - ungelöst, siehe `yahoo-service`.
-Danach IFX-Praxisfall bearbeitet: gleiches Strukturproblem wie DIS, gelöst über
-neuen separaten `ELLIOTT_LOOKBACK` (230 Tage) statt der viel aufwändigeren
-`ElliottWaveMacroCycleDemo`-Engine (~2600 Zeilen Beispielcode gesichtet, bewusst
-nicht portiert). Nebenbei: `ElliottAnalysisSupport` in `ElliottAnalysisUtil`
-umbenannt und aus `BearishIndicator` in eigene Klasse ausgelagert;
-`describeStage()` auf kompakte "A-B-"/"1-2-"-Notation umgestellt statt
-Volltext; `describeTarget()` (Kursziel + eigene Retracement-Näherung) neu
-ergänzt; Frontend-Farblogik der Elliott-Wave-Spalte entfernt. Am 03.08.
-zusätzlich `hasStrongConsensus()`-Gate ergänzt (Status: evtl. vorläufig,
-Rolf noch unentschieden) und die "Confidence ist nicht Wahrscheinlichkeit"-
-Erkenntnis anhand eines GDAXI-Beispiels dokumentiert. Nächster geplanter
-Schritt ("Option C": Elliott-Chart-Thumbnail/Modal im Frontend) ist besprochen
-und entschieden, aber noch nicht begonnen - Rolf ist ab 03.08. für mehrere
-Tage unterwegs, Fortsetzung zeitlich offen.
+**Zuletzt geändert:** 2026-08-23
+**Zuletzt bearbeitet von Claude:** Aufbauend auf dem 19./20.08.-Stand (siehe
+Roadmap oben für Details zu Option C, Currency-/Name-Rollout) folgten drei
+weitere Sessions rund um die lokale Build-Verifikation. Rolf hat `mvn compile`
+und `npm install && ng build` erfolgreich lokal ausgeführt (22.08.) - beide
+grün, nur eine Bundle-Budget-Warnung (`lightweight-charts` ließ das initiale
+Bundle auf 1.05 MB wachsen). Statt das Budget nur hochzusetzen, wurde
+`lightweight-charts` in beiden Chart-Komponenten auf dynamischen Import
+umgestellt (Code-Splitting in einen lazy-geladenen Chunk) - Budget konnte
+wieder auf 1.00 MB zurück. Danach schlug `docker compose up --build` mit
+`npm ci`/`EUSAGE` fehl, da `package-lock.json` seit dem Hinzufügen von
+`lightweight-charts` strukturell nicht mehr synchron zu `package.json`
+gehalten werden kann (Claudes Sandbox hat keinen Netzwerkzugriff für
+`npm install`) - Dockerfile daher auf `npm install` umgestellt. Schließlich
+fiel auf, dass der Client-Default `lookbackDays=90` nicht mehr zum
+Backend-`ELLIOTT_LOOKBACK_BY_INTERVAL["1d"]=230` passte; bei der Analyse
+stellte sich heraus, dass dieser Client-Wert die Elliott-Wave-Erkennung
+ohnehin nie beeinflusst hat (nur die Trend%-Spalte) - Default trotzdem auf
+230 synchronisiert und das Feld zur Vermeidung von Verwirrung
+schreibgeschützt gemacht. **Alle offenen Build-relevanten Punkte sind damit
+erledigt; das Projekt ist aus Sicht dieser Doku push-bereit.**
 
 
 ---
@@ -828,7 +1001,10 @@ Tage unterwegs, Fortsetzung zeitlich offen.
 - **Angular Material + Tailwind** – beide im Einsatz; `preflight: false` in Tailwind um Konflikte zu vermeiden
 - **Prebuilt Material Theme** – `indigo-pink.css` eingebunden via `angular.json styles`
 - **Kein `ngModule`** – ausschließlich Standalone Components
-- **PDF-Export** – immer Browser-Print, kein jsPDF oder Server-seitiges PDF
+- **PDF-Export** – immer Browser-Print, kein jsPDF oder Server-seitiges PDF. Chart-Spalte im PDF ist reines SVG (`buildChartSvg()` in `pdf-export.service.ts`), NICHT `lightweight-charts` einbetten - Druckfenster ist ein separates `document.write()`-Dokument, in dem eine asynchron ladende JS-Chart-Bibliothek nicht zuverlässig vor `window.print()` fertig würde.
+- **Preis-Währung** – immer `StockResult.currency` (ISO-4217 vom Daten-Service) nutzen, nie den Ticker raten (`shared/currency.util.ts`). Abruflisten können Werte aus verschiedenen Währungsräumen mischen.
+- **Bei neuen Feldern in `StockResult`/`TickerQuote`**: Änderung betrifft potenziell bis zu vier Repos (`yahoo-service`/`twelvedata-service` → `agent-service-java` → `angular-client`) - alle Konstruktor-/Builder-Aufrufstellen prüfen, nicht nur den Haupt-Erfolgspfad (siehe Currency-/Name-Rollout 19./20.08. als Beispiel: `DbClient.java` hatte z.B. direkte `TickerQuote`-Konstruktoraufrufe, die leicht übersehen werden).
+- **Neue npm-Dependencies in `angular-client`**: Claude kann `package-lock.json` in seiner Sandbox nicht aktuell halten (kein Netzwerkzugriff dort). Deshalb nutzt das Dockerfile bewusst `npm install` statt `npm ci` (23.08.) - sonst bricht der Docker-Build mit `EUSAGE` ab, sobald `package.json` und `package-lock.json` auseinanderlaufen. Nicht versehentlich zurück auf `npm ci` wechseln, ohne dass Rolf eine lokal aktualisierte `package-lock.json` beisteuert.
 - **VPN-Routing** – `yahoo-service` hat `network_mode: "container:vpn"`, keinen eigenen `stock-net`-Anschluss. Erreichbar über Alias `yahoo-service` am VPN-Gateway (Port 8011). Nie direkten Port für `yahoo-service` in `docker-compose.yml` eintragen.
 - **Secrets** – `.env`-Dateien niemals committen. Immer die `.env.example`-Vorlage aktuell halten wenn neue Variablen hinzukommen.
 - **Plattform** – `--platform=linux/arm64` in allen Dockerfiles (Apple Silicon). Bei x86-Änderungen immer erwähnen.
