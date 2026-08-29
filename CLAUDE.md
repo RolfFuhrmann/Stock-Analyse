@@ -556,25 +556,83 @@ Breakpoints trotzdem greifen). Kein Rebuild nötig, nur `docker compose up -d`.
 - **Frontend-Elliott-Wave-Chart-Visualisierung ("Option C"): umgesetzt (19.08.),
   siehe 3.1.** Kein offener Punkt mehr, außer der unten genannten Performance-
   Frage bei sehr großen Listen.
-- **Candle-Pattern-Erkennung eventuell auf ta4j umstellen (Idee, 19.08., noch
-  nicht begonnen):** Rolf zieht in Erwägung, die eigenentwickelte
-  `BullishCandlePatterns`/`BearishCandlePatterns`-Erkennung durch ta4js
-  `org.ta4j.core.indicators.candles.*` zu ersetzen. Recherche-Ergebnis:
-  ta4j deckt Hammer, Morning Star, Bullish Engulfing und Piercing ab (direkte
-  Ersatzkandidaten), hat aber **kein "Abandoned Baby"** (aktuell unser
-  stärkstes Muster, Strength 5) - müsste weiter eigenentwickelt bleiben oder
-  entfallen. ta4js Trendkontext-Vorbedingung basiert auf **ADX/+DI/-DI**
-  (Schwellwert 25), unsere eigene `hasDowntrendBefore()` dagegen auf
-  bestätigten ZigZag-Schwüngen - strukturell verschieden, Treffermenge würde
-  sich vermutlich spürbar verschieben, nicht nur kosmetisch. Es gibt zudem
-  zwei ta4j-Implementierungen für Piercing (`PiercingIndicator` vs.
-  `PiercingLineIndicator`) und Dark Cloud (`DarkCloudIndicator` vs.
-  `DarkCloudCoverIndicator`) - Auswahl nötig. ta4j liefert außerdem kein
-  eingebautes Scoring/Priorisierung (nur `true`/`false` je Bar) - die
-  "erstes Match gewinnt"-Kaskade mit Stärke-Ranking (`CandlePatternResult`)
-  müsste weiterhin selbst darum herum gebaut werden. **Empfehlung an Rolf:**
-  erst den aktuell laufenden Elliott-Wellen-Praxistest abschließen, bevor eine
-  zweite bewegliche Komponente (Candle-Erkennung) gleichzeitig verändert wird.
+- **Bullische UND bearische Candle-Pattern-Erkennung auf ta4j umgestellt
+  (23./24.08.), AUSSER jeweils Abandoned Baby:**
+  `BullishCandlePatterns.java` (Hammer, Morning Star, Bullish Engulfing,
+  Piercing Line) und `BearishCandlePatterns.java` (Shooting Star, Bearish
+  Engulfing, Dark Cloud Cover) nutzen jetzt ta4js Bausteine statt der alten
+  `CandleUtils`-Eigenentwicklung. **Abandoned Baby bleibt in beiden Klassen
+  unverändert Eigenentwicklung** - dafür gibt es keinen ta4j-Indikator
+  (Priorität/Strength 5, weiterhin zuerst geprüft).
+  **Wichtige Korrektur (23.08., nach Prüfung des echten ta4j-0.24.1-JARs -
+  Rolf hatte es als `.jar` hochgeladen, javap fehlte im Sandbox-Container,
+  daher eigener Konstantenpool-Parser gebaut):** Eine zunächst angenommene
+  Rule-Injection in ta4js Candle-Indikator-Konstruktoren
+  (`new HammerIndicator(series, downTrendRule)`) **existiert in 0.24.1
+  NICHT** - alle Hammer-/MorningStar-/Piercing-/ShootingStar-/DarkCloud-
+  Klassen binden ihre Trendprüfung weiterhin fest an einen internen,
+  nicht austauschbaren ADX-basierten `DownTrendIndicator`/`UpTrendIndicator`
+  (byte-identisch zu 0.22.7). Deshalb: Geometrie mit ta4js eigenen,
+  wiederverwendbaren Bausteinen (`RealBodyIndicator`, `Bar`/`Num`)
+  nachgebaut - identische Formeln/Default-Schwellwerte wie in ta4js
+  Originalklassen, aber ohne deren eingebaute Trendprüfung. Jede einzelne
+  dabei verwendete Methode/Konstruktor-Signatur wurde gegen den echten
+  0.24.1-Bytecode verifiziert (nicht nur gegen die vendorte 0.22.7-Quelle
+  geraten). Bullish/Bearish Engulfing haben in ta4j ohnehin **keine**
+  eingebaute Trendprüfung - dort wird ta4js `BullishEngulfingIndicator`/
+  `BearishEngulfingIndicator` unverändert für die reine Geometrie
+  übernommen.
+  **ta4j-Version auf 0.24.1 angehoben** (`pom.xml`, vorher 0.22.7).
+  **GD200→GD50→GD20-Kaskade (24.08., Rolfs Wunsch) statt einer festen
+  GD20-Prüfung:** jedes Muster wird zuerst gegen GD200 auf Trend geprüft,
+  dann GD50, dann GD20 - der erste GD, der bestätigt, gewinnt (`gdPeriod`
+  im Ergebnis). Bullish: Schlusskurs UNTER dem GD (Downtrend). Bearish:
+  Schlusskurs ÜBER dem GD (Uptrend). Gemeinsame Kaskaden-/Chart-Logik in
+  neuer Klasse `CandleGdCascade.java` ausgelagert (von beiden
+  Pattern-Klassen genutzt, `boolean downtrend`-Parameter steuert die
+  Vergleichsrichtung), um sie nicht doppelt zu pflegen.
+  **Chart-Visualisierung im Frontend (24.08.):** neue Modelle
+  `CandleChartData`/`CandleGdPoint` (Bars + GD-Linien-Werte + Datum der
+  Muster-Kerze(n)), durchgereicht bis `StockResult.candle_chart`/
+  `candle_gd_period`. Neue Angular-Komponenten
+  `candle-pattern-chart-thumbnail`/`candle-pattern-chart-modal` (Struktur an
+  die Elliott-Chart-Komponenten angelehnt) - neue Spalte "Muster-Chart" in
+  der Ergebnistabelle, Klick öffnet Modal mit Kerzen + GD-Linie + markierter
+  Muster-Kerze, Titel z.B. "Hammer unterhalb GD200" bzw. "Shooting Star
+  oberhalb GD200" (Richtung wird aus dem Musternamen abgeleitet,
+  `BEARISH_PATTERNS`-Set in `results-table.component.ts` - **beim ersten
+  Entwurf war das Modal fest auf "unterhalb" verdrahtet, was für bearische
+  Muster falsch war; noch in derselben Session korrigiert**). Candlestick-
+  Pattern-Badge zeigt zusätzlich "(GD200)" - in Tabelle UND PDF (PDF nur als
+  Text, keine Chart-Grafik dort - bewusst ausgelassen, siehe unten).
+  **Tests:** `BullishCandlePatternsTest.java`/`BearishCandlePatternsTest.java`
+  - Downtrend-/Uptrend-Präfixe auf ≥18-19 Kerzen verlängert
+  (`decliningRun()`/`risingRun()`-Hilfsmethoden), da die SMA-Kaskade mehr
+  Historie braucht als die alte, kürzere `hasDowntrendBefore()`/
+  `hasUptrendBefore()`-Prüfung. Der `bar()`-Test-Helper musste von einem
+  konstanten Fixdatum ("2025-01-01" für jede Kerze) auf fortlaufend
+  eindeutige Daten umgestellt werden - `ElliottAnalysisUtil.toBarSeries()`
+  (jetzt auch von beiden Pattern-Klassen genutzt, dafür **public** gemacht -
+  ein erster Deploy-Versuch schlug fehl, weil nur die Methode, nicht aber
+  die umgebende Klasse public war) braucht pro Kerze eine strikt
+  aufsteigende `endTime`, was die alte `CandleUtils`-Logik nie interessiert
+  hat. Piercing-Line- und Shooting-Star-/Dark-Cloud-Cover-/Bearish-
+  Engulfing-Tests waren im ursprünglichen Test-Suite z.T. gar nicht bzw.
+  ohne GD-Kompatibilität abgedeckt - ergänzt. Abandoned-Baby-Tests (beide
+  Klassen) unverändert, kein GD-Bezug.
+  **Piercing-/Dark-Cloud-Variantenwahl:** `PiercingLineIndicator` statt
+  `PiercingIndicator`, `DarkCloudCoverIndicator` statt `DarkCloudIndicator`
+  (jeweils neuer, @since 0.22.3, explizit konfigurierbare Gap-/Penetrations-
+  Schwellen statt fest verdrahtet). ta4j liefert kein eingebautes
+  Scoring/Priorisierung (nur `true`/`false` je Bar) - die "erstes Match
+  gewinnt"-Kaskade mit Stärke-Ranking (`CandlePatternResult`) bleibt daher
+  weiterhin selbst gebaut.
+  **Noch offen:** GD-Kalibrierung (Periodenlänge, evtl. Steigungskriterium
+  statt reinem Preisvergleich) an echten Marktdaten nicht validiert - Rolfs
+  eigene Einschätzung dazu: "Die Praxis wird zeigen ob es tatsächlich
+  funktioniert" (24.08.). PDF-Chart-Grafik für Candle-Patterns fehlt
+  (analog zum Elliott-Chart-SVG wäre das ein eigener SVG-Renderer, aus
+  Zeitgründen ausgelassen).
 - **Build-Verifikation: erledigt (22.08.).** `mvn compile` (agent-service-java)
   und `npm install && ng build` (angular-client) von Rolf lokal erfolgreich
   durchlaufen. Kein offener Punkt mehr.
@@ -961,16 +1019,27 @@ docker logs -f stock_history_fetcher
 - [ ] **Praxistest der Elliott-Wellen-Erkennung läuft (Rolf, ab 19.08.)** -
       prüft anhand des neuen Charts, ob die von ta4j gefundenen Wellen
       plausibel sind
-- [ ] **Idee, noch nicht begonnen: Candle-Pattern-Erkennung eventuell auf ta4j
-      umstellen** (Rolf, 19.08.) - siehe Recherche-Ergebnis + Empfehlung in
-      3.2c (erst Elliott-Praxistest abschließen)
+- [x] Bullische UND bearische Candle-Pattern-Erkennung auf ta4j umgestellt
+      (23./24.08., außer jeweils Abandoned Baby) - Geometrie aus ta4js
+      RealBodyIndicator/Bar/Num nachgebaut (KEINE Rule-Injection, siehe
+      Korrektur in 3.2c), GD200→GD50→GD20-Kaskade als Trend-Regel
+      (`CandleGdCascade.java`), plus Chart-Visualisierung im Frontend
+      ("Muster-Chart"-Spalte). Von Rolf lokal als `mvn compile`-fähig
+      bestätigt (24.08., nach einem Fix: `ElliottAnalysisUtil` musste
+      `public` sein, nicht nur `toBarSeries()`)
+- [ ] GD-Kalibrierung (Periodenlänge, evtl. Steigungskriterium statt reinem
+      Preisvergleich) an echten Marktdaten noch nicht validiert - Rolfs
+      eigene Einschätzung: "Die Praxis wird zeigen ob es tatsächlich
+      funktioniert" (24.08.)
+- [ ] PDF-Chart-Grafik für Candle-Patterns fehlt (nur Text "(GD200)" im
+      Badge, kein SVG wie beim Elliott-Chart)
 - [ ] Thumbnail-Chart-Performance bei sehr langen Ticker-Listen (DAX/Dow) noch
       nicht geprüft
 - [ ] Klären: Python-`agent-service` (Port 8010) noch aktiv oder durch
       `agent-service-java` ersetzt?
 - [ ] `stock-data-db-access`: README/Doku für Java-25-Stand ergänzen
 
-**Zuletzt geändert:** 2026-08-23
+**Zuletzt geändert:** 2026-08-24
 **Zuletzt bearbeitet von Claude:** Aufbauend auf dem 19./20.08.-Stand (siehe
 Roadmap oben für Details zu Option C, Currency-/Name-Rollout) folgten drei
 weitere Sessions rund um die lokale Build-Verifikation. Rolf hat `mvn compile`
@@ -983,14 +1052,38 @@ wieder auf 1.00 MB zurück. Danach schlug `docker compose up --build` mit
 `npm ci`/`EUSAGE` fehl, da `package-lock.json` seit dem Hinzufügen von
 `lightweight-charts` strukturell nicht mehr synchron zu `package.json`
 gehalten werden kann (Claudes Sandbox hat keinen Netzwerkzugriff für
-`npm install`) - Dockerfile daher auf `npm install` umgestellt. Schließlich
-fiel auf, dass der Client-Default `lookbackDays=90` nicht mehr zum
+`npm install`) - Dockerfile daher auf `npm install` umgestellt. Danach fiel
+auf, dass der Client-Default `lookbackDays=90` nicht mehr zum
 Backend-`ELLIOTT_LOOKBACK_BY_INTERVAL["1d"]=230` passte; bei der Analyse
 stellte sich heraus, dass dieser Client-Wert die Elliott-Wave-Erkennung
 ohnehin nie beeinflusst hat (nur die Trend%-Spalte) - Default trotzdem auf
 230 synchronisiert und das Feld zur Vermeidung von Verwirrung
-schreibgeschützt gemacht. **Alle offenen Build-relevanten Punkte sind damit
-erledigt; das Projekt ist aus Sicht dieser Doku push-bereit.**
+schreibgeschützt gemacht.
+
+Ab 23.08. dann die Candle-Pattern-Umstellung: Rolf griff die zuvor
+zurückgestellte Idee wieder auf. Claude baute zunächst die Kerzen-Geometrie
+von Hand mit ta4js Rule-losen 0.22.7-Bausteinen nach (RealBodyIndicator +
+eigener Gd20DownTrendIndicator) - Rolf verwies auf ein Rule-Injection-Beispiel
+(`new HammerIndicator(series, downTrendRule)`), woraufhin Claude komplett
+darauf umbaute, ohne es verifizieren zu können (kein 0.24.1-Quellcode
+verfügbar). **Rolf lud daraufhin die echte `ta4j-core-0.24.1.jar` hoch** -
+die Prüfung (eigener Konstantenpool-Parser gebaut, da `javap` im
+Sandbox-Container fehlte) widerlegte die Rule-Injection-Annahme eindeutig:
+alle betroffenen ta4j-Klassen binden ihre Trendprüfung weiterhin fest an
+ADX/UpTrend, byte-identisch zu 0.22.7. Claude baute daraufhin auf den
+ursprünglichen, jetzt gegen den echten Bytecode verifizierten Ansatz zurück.
+Danach zwei direkte Iterationen auf Rolfs Anfrage: (1) die feste GD20-Prüfung
+durch eine GD200→GD50→GD20-Kaskade ersetzt, inkl. neuer Chart-Visualisierung
+im Client ("Muster-Chart"-Spalte, z.B. "Hammer unterhalb GD200"); (2) dieselbe
+Umstellung für `BearishCandlePatterns` übertragen (Shooting Star, Bearish
+Engulfing, Dark Cloud Cover), inkl. eines dabei entdeckten und noch in
+derselben Session behobenen Richtungs-Bugs (Modal/Tooltip zeigten fest
+"unterhalb GD", was für bearische Muster falsch ist - jetzt musterabhängig
+"unterhalb"/"oberhalb"). Ein erster Docker-Build schlug fehl
+(`ElliottAnalysisUtil is not public` - nur die genutzte Methode, nicht die
+Klasse selbst war public gemacht worden), von Rolf gemeldet und sofort
+behoben. **`docker compose up -d --build agent-service-java` läuft seitdem
+bei Rolf durch.** GD-Kalibrierung an echten Marktdaten steht noch aus.
 
 
 ---

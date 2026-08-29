@@ -164,7 +164,7 @@ export class PdfExportService {
         : '–';
     const score    = `<span class="badge score-${r.criteria_met}">${r.criteria_met}/3</span>`;
     const candle   = r.candle_pattern
-      ? `<span class="candle-badge candle-s${r.candle_strength}">${r.candle_pattern}</span>`
+      ? `<span class="candle-badge candle-s${r.candle_strength}">${r.candle_pattern}${r.candle_gd_period ? ` (GD${r.candle_gd_period})` : ''}</span>`
       : '–';
     const mlSignal: Record<string, string> = { strong: '🔥 Stark', moderate: '↑ Mittel', weak: '~ Schwach', none: '–' };
     const mlClass:  Record<string, string> = { strong: 'ml-strong', moderate: 'ml-moderate', weak: 'ml-weak', none: 'ml-none' };

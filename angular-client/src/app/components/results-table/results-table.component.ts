@@ -195,9 +195,11 @@ type SortDir = 'asc' | 'desc' | null;
             </th>
             <td mat-cell *matCellDef="let row" class="col-candle">
               @if (row.candle_pattern) {
-                <span [class]="'candle-badge candle-s' + row.candle_strength" [matTooltip]="candleTooltip(row.candle_strength)">{{
-                  row.candle_pattern
-                }}</span>
+                <span
+                  [class]="'candle-badge candle-s' + row.candle_strength"
+                  [matTooltip]="candleTooltip(row.candle_strength) + candleGdTooltipSuffix(row)"
+                  >{{ row.candle_pattern }}{{ row.candle_gd_period ? ' (GD' + row.candle_gd_period + ')' : '' }}</span
+                >
               } @else {
                 <span class="candle-none">–</span>
               }
@@ -705,6 +707,22 @@ export class ResultsTableComponent {
       width: '760px',
       maxWidth: '90vw',
     });
+  }
+
+  /** Bearische ta4j-Muster (siehe BearishCandlePatterns.java) - GD-Kaskade prüft dort auf Uptrend (Kurs ÜBER GD). */
+  private static readonly BEARISH_PATTERNS = new Set(['Dark Cloud Cover', 'Bearish Engulfing', 'Shooting Star']);
+
+  /** "unterhalb" bei bullischen, "oberhalb" bei bearischen ta4j-Mustern. */
+  private candleGdDirection(pattern: string): 'unterhalb' | 'oberhalb' {
+    return ResultsTableComponent.BEARISH_PATTERNS.has(pattern) ? 'oberhalb' : 'unterhalb';
+  }
+
+  /** Tooltip-Zusatz für die Candlestick-Pattern-Spalte, z.B. " · unterhalb GD200". Leer, falls kein GD ermittelt wurde. */
+  candleGdTooltipSuffix(row: StockResult): string {
+    if (!row.candle_gd_period || !row.candle_pattern) {
+      return '';
+    }
+    return ` · ${this.candleGdDirection(row.candle_pattern)} GD${row.candle_gd_period}`;
   }
 
   candleTooltip(strength: number): string {

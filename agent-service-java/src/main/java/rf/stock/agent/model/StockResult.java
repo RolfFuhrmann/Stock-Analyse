@@ -72,6 +72,16 @@ public record StockResult(
     @JsonProperty("candle_pattern")  String candlePattern,
     @JsonProperty("candle_strength") int candleStrength,
 
+    /**
+     * Welcher gleitende Durchschnitt (20/50/200) den Downtrend für das
+     * erkannte Muster bestätigt hat (siehe BullishCandlePatterns-Kaskade:
+     * bullisch: erst GD200, dann GD50, dann GD20. bearisch: erst GD20, dann
+     * GD50, dann GD200 (siehe CandleGdCascade). null bei "Bullish/Bearish
+     * Abandoned Baby" (nutzt weiterhin die alte ZigZag-basierte
+     * Trendprüfung) und bei fehlendem Muster.
+     */
+    @JsonProperty("candle_gd_period") Integer candleGdPeriod,
+
     // ML-Felder
     @JsonProperty("reversal_prob")   Double reversalProb,
     @JsonProperty("reversal_pct")    Double reversalPct,

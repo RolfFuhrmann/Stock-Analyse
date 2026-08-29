@@ -3,6 +3,7 @@ package rf.stock.agent.candle;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertNull;
 
+import java.util.ArrayList;
 import java.util.List;
 
 import org.junit.jupiter.api.Test;
@@ -10,85 +11,118 @@ import org.junit.jupiter.api.Test;
 import rf.stock.agent.model.CandlePatternResult;
 import rf.stock.agent.model.OhlcvBar;
 
+/**
+ * Shooting Star/Bearish Engulfing/Dark Cloud Cover sind seit 24.08.
+ * ta4j-basiert mit einer GD20→GD50→GD200-Kaskade (Uptrend: Schlusskurs ÜBER
+ * dem GD) statt der alten CandleUtils-Trendprüfung - siehe
+ * BearishCandlePatterns.java-Klassenkommentar und CandleGdCascade. Dieselbe
+ * Anpassung wie bei BullishCandlePatternsTest: Uptrend-Präfixe auf >=18-19
+ * Kerzen verlängert (risingRun()/decliningRun()), damit die GD-Berechnung
+ * überhaupt Werte liefert, und der bar()-Helper nutzt fortlaufende statt
+ * konstante Daten (ElliottAnalysisUtil.toBarSeries() braucht eine strikt
+ * aufsteigende endTime pro Kerze). Bearish Abandoned Baby ist von beidem
+ * nicht betroffen (weiterhin Eigenentwicklung, kein GD, kein toBarSeries()).
+ */
 class BearishCandlePatternsTest {
 
     @Test
     void shouldDetectShootingStarAfterUptrend() {
 
-        List<OhlcvBar> bars = List.of(
-                // 5 Kerzen Uptrend
-                bar(10.0, 10.6, 9.8, 10.5),
-                bar(10.5, 11.1, 10.3, 11.0),
-                bar(11.0, 11.6, 10.8, 11.5),
-                bar(11.5, 12.1, 11.3, 12.0),
-                bar(12.0, 12.6, 11.8, 12.5),
+        List<OhlcvBar> bars = concat(
+                risingRun(19, 6.0, 0.35),
 
                 // Shooting Star
-                bar(12.5, 13.5, 12.45, 12.6));
+                List.of(bar(12.5, 13.5, 12.45, 12.6)));
 
         CandlePatternResult result = BearishCandlePatterns.detect(bars);
 
         assertEquals("Shooting Star", result.pattern());
+        assertEquals(20, result.gdPeriod());
+    }
+
+    @Test
+    void shouldNotDetectShootingStarWithoutUptrend() {
+
+        List<OhlcvBar> bars = concat(
+                decliningRun(19, 20.0, 0.4),
+
+                // Shooting-Star-Form vorhanden, aber kein Uptrend davor
+                List.of(bar(12.5, 13.5, 12.45, 12.6)));
+
+        CandlePatternResult result = BearishCandlePatterns.detect(bars);
+
+        assertNull(result.pattern());
+        assertNull(result.gdPeriod());
     }
 
     @Test
     void shouldDetectBearishEngulfingAfterUptrend() {
 
-        List<OhlcvBar> bars = List.of(
-                // Uptrend (4 Kerzen)
-                bar(10.0, 10.6, 9.8, 10.5),
-                bar(10.5, 11.1, 10.3, 11.0),
-                bar(11.0, 11.6, 10.8, 11.5),
-                bar(11.5, 12.1, 11.3, 12.0),
+        List<OhlcvBar> bars = concat(
+                risingRun(18, 6.0, 0.36),
 
-                // grüne Kerze, Teil des Uptrends
-                bar(12.0, 12.6, 11.8, 12.5),
+                List.of(
+                        // grüne Kerze, Teil des Uptrends
+                        bar(12.0, 12.6, 11.8, 12.5),
 
-                // rote Kerze engulfed den Body
-                bar(12.6, 12.7, 11.85, 11.9));
+                        // rote Kerze engulfed den Body
+                        bar(12.6, 12.7, 11.85, 11.9)));
 
         CandlePatternResult result = BearishCandlePatterns.detect(bars);
 
         assertEquals("Bearish Engulfing", result.pattern());
+        assertEquals(20, result.gdPeriod());
     }
 
     @Test
     void shouldNotDetectBearishEngulfingWithoutUptrend() {
 
-        List<OhlcvBar> bars = List.of(
-                bar(20, 19, 21, 19.5),
-                bar(19.5, 18.5, 20, 19.0),
-                bar(19.0, 18.0, 19.5, 18.4),
-                bar(18.4, 17.4, 18.9, 17.9),
+        List<OhlcvBar> bars = concat(
+                decliningRun(18, 20.0, 0.4),
 
-                bar(17.7, 18.5, 17.2, 18.3),
-
-                bar(18.4, 18.6, 17.1, 17.3));
+                List.of(
+                        bar(12.0, 12.6, 11.8, 12.5),
+                        bar(12.6, 12.7, 11.85, 11.9)));
 
         CandlePatternResult result = BearishCandlePatterns.detect(bars);
 
         assertNull(result.pattern());
+        assertNull(result.gdPeriod());
     }
 
     @Test
     void shouldDetectDarkCloudCoverAfterUptrend() {
 
-        List<OhlcvBar> bars = List.of(
-                // Uptrend (4 Kerzen)
-                bar(10.0, 10.6, 9.8, 10.5),
-                bar(10.5, 11.1, 10.3, 11.0),
-                bar(11.0, 11.6, 10.8, 11.5),
-                bar(11.5, 12.1, 11.3, 12.0),
+        List<OhlcvBar> bars = concat(
+                risingRun(18, 6.0, 0.36),
 
-                // grüne Kerze, Teil des Uptrends
-                bar(12.0, 12.6, 11.8, 12.5),
+                List.of(
+                        // grüne Kerze, Teil des Uptrends
+                        bar(12.0, 12.6, 11.8, 12.5),
 
-                // rote Kerze schließt tief in den Body der grünen Kerze
-                bar(12.7, 12.9, 12.1, 12.2));
+                        // rote Kerze schließt tief in den Body der grünen Kerze
+                        bar(12.7, 12.9, 12.1, 12.2)));
 
         CandlePatternResult result = BearishCandlePatterns.detect(bars);
 
         assertEquals("Dark Cloud Cover", result.pattern());
+        assertEquals(20, result.gdPeriod());
+    }
+
+    @Test
+    void shouldNotDetectDarkCloudCoverWithoutUptrend() {
+
+        List<OhlcvBar> bars = concat(
+                decliningRun(18, 20.0, 0.4),
+
+                List.of(
+                        bar(12.0, 12.6, 11.8, 12.5),
+                        bar(12.7, 12.9, 12.1, 12.2)));
+
+        CandlePatternResult result = BearishCandlePatterns.detect(bars);
+
+        assertNull(result.pattern());
+        assertNull(result.gdPeriod());
     }
 
     @Test
@@ -114,7 +148,54 @@ class BearishCandlePatternsTest {
         CandlePatternResult result = BearishCandlePatterns.detect(bars);
 
         assertEquals("Bearish Abandoned Baby", result.pattern());
+        assertNull(result.gdPeriod());
     }
+
+    /** Erzeugt `count` konsekutive bullische Kerzen, steigend von startPrice in stepPerBar-Schritten. */
+    private static List<OhlcvBar> risingRun(int count, double startPrice, double stepPerBar) {
+        List<OhlcvBar> bars = new ArrayList<>();
+        double price = startPrice;
+        for (int i = 0; i < count; i++) {
+            double open = price;
+            double close = price + stepPerBar;
+            double high = close + stepPerBar * 0.2;
+            double low = open - stepPerBar * 0.2;
+            bars.add(bar(open, high, low, close));
+            price = close;
+        }
+        return bars;
+    }
+
+    /** Erzeugt `count` konsekutive bearische Kerzen, fallend von startPrice in stepPerBar-Schritten. */
+    private static List<OhlcvBar> decliningRun(int count, double startPrice, double stepPerBar) {
+        List<OhlcvBar> bars = new ArrayList<>();
+        double price = startPrice;
+        for (int i = 0; i < count; i++) {
+            double open = price;
+            double close = price - stepPerBar;
+            double high = open + stepPerBar * 0.2;
+            double low = close - stepPerBar * 0.2;
+            bars.add(bar(open, high, low, close));
+            price = close;
+        }
+        return bars;
+    }
+
+    @SafeVarargs
+    private static List<OhlcvBar> concat(List<OhlcvBar>... parts) {
+        List<OhlcvBar> result = new ArrayList<>();
+        for (List<OhlcvBar> part : parts) {
+            result.addAll(part);
+        }
+        return result;
+    }
+
+    /**
+     * Fortlaufender Zähler statt Fixdatum - siehe BullishCandlePatternsTest für
+     * die Begründung (ElliottAnalysisUtil.toBarSeries() braucht eine strikt
+     * aufsteigende endTime pro Kerze).
+     */
+    private static int dayOffset = 0;
 
     private static OhlcvBar bar(double open,
             double high,
@@ -122,7 +203,7 @@ class BearishCandlePatternsTest {
             double close) {
 
         return new OhlcvBar(
-                "2025-01-01",
+                java.time.LocalDate.of(2025, 1, 1).plusDays(dayOffset++).toString(),
                 open,
                 high,
                 low,

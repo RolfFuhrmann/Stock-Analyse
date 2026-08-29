@@ -61,7 +61,9 @@
             <artifactId>spring-boot-jackson2</artifactId>
         </dependency>
 
-        <!-- ta4j: Elliott-Wave-Analyse (ElliottWaveFacade) für BearishIndicator.
+        <!-- ta4j: Elliott-Wave-Analyse (ElliottWaveFacade) für BearishIndicator,
+             seit 23.08. zusätzlich Basis für die bullische Candle-Pattern-
+             Erkennung (siehe candle/Ta4jBullishCandlePatterns.java).
              Ersetzt die handgestrickte 5-Wellen-Logik durch ein ausgereiftes,
              szenario-basiertes Modell mit Confidence-Scoring statt hartem
              Pass/Fail. Erfordert Java 25+ (siehe Phase-1-Migration). -->

@@ -53,6 +53,8 @@ export interface StockResult {
   source: string;
   candle_pattern: string | null;
   candle_strength: number;
+  /** Welcher GD (20/50/200) den Trend für das Muster bestätigt hat (bullisch: erst GD200, bearisch: erst GD20). null bei Abandoned Baby/kein Muster. */
+  candle_gd_period: number | null;
   // ── ML-Signal ──────────────────────────────────────────
   reversal_prob:  number | null;
   reversal_pct:   number | null;
