@@ -26,10 +26,16 @@ src/main/java/rf/stock/agent/
 ├── controller/
 │   └── AgentController.java         /health, /analyze/stream, /analyze/stop
 ├── service/
-│   ├── AnalysisService.java         Kernlogik: Routing 1d (SSE) vs 4h/1h (DB)
-│   ├── DataServiceClient.java       SSE-Client für Yahoo/TwelveData
-│   ├── DbClient.java                REST-Client für 4h/1h-Kerzen aus der DB
+│   ├── AnalysisService.java         Kernlogik: Live-Abruf für 1d, 4h und 1h
+│   ├── DataServiceClient.java       SSE-Client für Yahoo/TwelveData (mit interval)
+│   ├── DbClient.java                REST-Client zur DB (Lesen + Write-back)
+│   ├── DailyBarWriteBackService.java     Write-back 1d-Kerzen in die DB
+│   ├── IntradayBarWriteBackService.java  Write-back 1h/4h-Kerzen in die DB
+│   ├── VpnService.java              VPN-Info und IP-Wechsel über Gluetun
 │   └── MlClient.java                REST-Client für ML-Service
+├── util/
+│   ├── IntradayBarUtil.java         Zeitstempel normalisieren + 1h → 4h aggregieren
+│   └── TradingDayUtil.java          Handelstage-Arithmetik (Write-back-Cutoff)
 ├── indicator/
 │   ├── BullishIndicator.java        Elliott A-B-C + MACD<0 + Stoch<20
 │   └── BearishIndicator.java        Elliott 1-2-3 + MACD>0 + Stoch>80
@@ -41,6 +47,42 @@ src/main/java/rf/stock/agent/
 │                                    Engulfing, Shooting Star
 └── model/                           Records für Request/Response/Domain-Objekte
 ```
+
+## VPN-Steuerung
+
+`GET /vpn/info` (Status, IP, Standort) und `POST /vpn/rotate` (IP wechseln)
+sprechen mit dem Steuerungs-Server von Gluetun (`VPN_CONTROL_URL`, Default
+`http://vpn:8000`). Gluetun braucht dafür eine `config.toml`, die
+`GET /v1/vpn/status` und `PUT /v1/vpn/status` freigibt (Details in der
+CLAUDE.md, Abschnitt 3.5). Ausgangs-IP und Standort kommen von
+`yahoo-service GET /ip`.
+
+## Live-Abruf und Write-back (1d, 4h, 1h)
+
+Alle Intervalle werden live von Yahoo bzw. TwelveData abgerufen. Die
+abgerufenen Kerzen werden zusätzlich asynchron (fire-and-forget) in die DB
+zurückgeschrieben - ein Fehler dabei wird nur geloggt und beeinflusst die
+Analyse nie.
+
+| Quelle     | Ansicht | Abruf          | Geschrieben in                           |
+| ---------- | ------- | -------------- | ---------------------------------------- |
+| Yahoo      | 1d      | 1d             | `ohlcv_daily`                            |
+| Yahoo      | 1h / 4h | 1h (Yahoo kann kein 4h) | `ohlcv_hourly` + aus 1h berechnet `ohlcv_4h` |
+| TwelveData | 1d      | 1day           | `ohlcv_daily`                            |
+| TwelveData | 1h      | 1h             | `ohlcv_hourly`                           |
+| TwelveData | 4h      | 4h (nativ)     | `ohlcv_4h`                               |
+
+Schreib-Regel (für alle Tabellen gleich): den neuesten Zeitstempel des
+Tickers in der DB ermitteln, davon 5 Handelstage zurückrechnen, ab dort alles
+Abgerufene schreiben. Vorhandene Kerzen werden überschrieben (Upsert im
+DB-Service), fehlende ergänzt - das schließt die Lücke zwischen letztem
+DB-Eintrag und jetzt. Ältere Lücken (mehr als 5 Handelstage vor dem letzten
+DB-Eintrag) füllt nur der history-fetcher. Neuer Ticker ohne DB-Daten: alles
+schreiben.
+
+Intraday-Zeitstempel sind lokale Börsenzeit ohne Zone (`yyyy-MM-ddTHH:mm:ss`),
+exakt wie im history-fetcher. Die 4h-Blöcke starten bei 0/4/8/12/16/20 Uhr
+(lokale Börsenzeit), Blöcke mit weniger als 2 Kerzen werden verworfen.
 
 ## Build & Run lokal
 

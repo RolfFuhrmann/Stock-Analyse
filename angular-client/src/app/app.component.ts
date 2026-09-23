@@ -10,6 +10,7 @@ import { EmptyStateComponent } from './components/empty-state/empty-state.compon
 import { CriteriaFilterComponent } from './components/criteria-filter/criteria-filter.component';
 import { TickerListPanelComponent, ListSelection } from './components/ticker-list-panel/ticker-list-panel.component';
 import { TickerListEditorComponent } from './components/ticker-list-editor/ticker-list-editor.component';
+import { SettingsPanelComponent } from './components/settings-panel/settings-panel.component';
 
 import { AnalysisService } from './services/analysis.service';
 import { PdfExportService } from './services/pdf-export.service';
@@ -26,6 +27,7 @@ import {
     FilterHeaderComponent, KpiBarComponent,
     ResultsTableComponent, EmptyStateComponent, CriteriaFilterComponent,
     TickerListPanelComponent, TickerListEditorComponent,
+    SettingsPanelComponent,
   ],
   template: `
     <!-- Sticky Header -->
@@ -40,6 +42,14 @@ import {
       (exportPdf)="onExportPdf()"
       (stop)="onStop()"
       (home)="onHome()"
+      (settings)="settingsOpen.set(true)"
+    />
+
+    <!-- Einstellungen (Off-Canvas von rechts): VPN-Daten und IP-Wechsel -->
+    <app-settings-panel
+      [open]="settingsOpen()"
+      [analysisRunning]="loading()"
+      (closed)="settingsOpen.set(false)"
     />
 
     <!-- Listen-Panel: nur auf Startseite sichtbar -->
@@ -123,6 +133,9 @@ export class AppComponent implements OnDestroy {
   readonly hasAnalyzed    = signal(false);
 
   private _subscription: Subscription | null = null;
+
+  /** Einstellungen-Panel (Zahnrad im Header) geöffnet? */
+  readonly settingsOpen   = signal(false);
 
   // ── Panel-State ──────────────────────────────────────────
   /** Panel sichtbar solange keine Analyse läuft und keine Ergebnisse vorhanden */

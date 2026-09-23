@@ -50,3 +50,6 @@ __MACOSX/
 # ── Logs & temporäre Dateien ──────────────────────────────────
 *.log
 *.tmp
+
+# -- agent-service-java/ta4j ------------------------------------
+agent-service-java/ta4j

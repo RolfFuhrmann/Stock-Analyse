@@ -51,16 +51,124 @@ export interface StockResult {
   macd_histogram: boolean;
   criteria_met: number;
   source: string;
-  candle_pattern: string | null;
-  candle_strength: number;
+  /**
+   * Allgemeingültiges Candlestick-Pattern-Ergebnis (07.09., ersetzt die
+   * vorherigen Einzelfelder candle_pattern/candle_strength/candle_gd_period).
+   * pattern ist null wenn kein Muster erkannt wurde - das Objekt selbst ist
+   * nie null.
+   */
+  candle: CandlePattern;
   // ── ML-Signal ──────────────────────────────────────────
   reversal_prob:  number | null;
   reversal_pct:   number | null;
   ml_signal:      'none' | 'weak' | 'moderate' | 'strong';
   ml_confidence:  'low' | 'medium' | 'high';
   ml_available:   boolean;
+  /** Erklärung des Modellwerts (welche Merkmale ihn bestimmen) - null, wenn nicht geliefert */
+  ml_explanation?: MlExplanation | null;
   // ───────────────────────────────────────────────────────
   error: string | null;
+}
+
+// ── ML-Erklärung ─────────────────────────────────────────────
+
+/** Ein Merkmal und sein Einfluss auf den ML-Modellwert. */
+export interface MlFactor {
+  /** technischer Name, z.B. "vol_20d" */
+  feature:    string;
+  /** deutsche Bezeichnung */
+  label:      string;
+  value:      number;
+  /** aufbereiteter Wert für die Anzeige, z.B. "4,1 %" */
+  value_text: string;
+  /** Einfluss in Prozentpunkten: positiv schiebt den Wert nach oben, negativ nach unten */
+  effect_pp:  number;
+}
+
+/** Zusammensetzung eines Modellwerts: base_pct + Σ effect_pp + other_pp = prob_pct. */
+export interface MlExplanation {
+  interval:          '1d' | '4h' | '1h';
+  base_pct:          number;
+  prob_pct:          number;
+  factors:           MlFactor[];
+  other_pp:          number;
+  other_count:       number;
+  /** typischer Modellwert für diesen Zeitrahmen im Training (null bei älteren Modellen) */
+  typical_score_pct: number | null;
+  /** Anteil tatsächlicher Anstiege für diesen Zeitrahmen im Training (null bei älteren Modellen) */
+  actual_rate_pct:   number | null;
+}
+
+/** Kennzahlen je Zeitrahmen aus dem Training (nur bei Modellen ab 21.09.). */
+export interface MlIntervalBreakdown {
+  train_samples:     number;
+  test_samples:      number;
+  positive_rate_pct: number | null;
+  mean_score_pct:    number | null;
+  test_roc_auc?:     number;
+  test_precision?:   number;
+  test_recall?:      number;
+}
+
+/** Ein Wahrscheinlichkeits-Bin der Kalibrierung (Testmenge). */
+export interface MlCalibrationBin {
+  bin_from:      number;
+  bin_to:        number;
+  samples:       number;
+  predicted_pct: number;
+  actual_pct:    number;
+}
+
+/** Antwort von GET /ml/info im agent-service-java (durchgereicht vom ml-service). */
+export interface MlModelInfo {
+  model_ready:              boolean;
+  error?:                   string;
+  training_active?:         boolean;
+  trained_at?:              string | null;
+  next_retrain?:            string | null;
+  total_samples?:           number;
+  train_samples?:           number;
+  val_samples?:             number;
+  test_samples?:            number;
+  /** false = Modell vor dem 21.09. trainiert, Modellwert ist unkalibriert */
+  calibrated?:              boolean;
+  tickers_count?:           number;
+  positive_rate_pct?:       number;
+  forecast_horizon?:        number;
+  reversal_threshold_pct?:  number;
+  intervals_trained?:       string[];
+  scale_pos_weight?:        number | null;
+  metrics?:                 { precision?: number; recall?: number; roc_auc?: number };
+  thresholds?:              { weak: number; moderate: number; strong: number };
+  feature_importance?:      { feature: string; label: string; importance: number }[];
+  breakdown?:               Record<string, MlIntervalBreakdown> | null;
+  calibration?:             MlCalibrationBin[] | null;
+}
+
+/**
+ * Allgemeingültiges Candlestick-Pattern-Ergebnis, für alle Muster nutzbar
+ * (07.09.). Aktuell befüllt candle_dates/confirmed nur Hammer - bei den
+ * übrigen Mustern (Morning Star, Bullish/Bearish Engulfing, Piercing Line,
+ * Abandoned Baby) ist candle_dates null und confirmed immer false.
+ */
+export interface CandlePattern {
+  /** z.B. "Hammer", "Morning Star" oder null (kein Muster). */
+  pattern: string | null;
+  /** 0–5, 0 = kein Muster. */
+  strength: number;
+  /** Welcher GD (20/50/200) den Trend bestätigt hat. null bei ADX-basierten Mustern (aktuell nur Hammer), Abandoned Baby und fehlendem Muster. */
+  gd_period: number | null;
+  /**
+   * Datum/Daten der am Muster beteiligten Kerze(n). Bei confirmed=true
+   * enthält die Liste BEIDE Daten (Musterkerze + Bestätigungskerze).
+   */
+  candle_dates: string[] | null;
+  /**
+   * true, wenn nicht die Musterkerze selbst, sondern eine nachfolgende
+   * Kerze das Signal auslöst (z.B. Hammer + Bestätigung durch höheren
+   * Schlusskurs am Folgetag).
+   */
+  confirmed: boolean;
 }
 
 // ── Elliott-Wave-Chart ("Option C") ──────────────────────
@@ -187,4 +295,29 @@ export function formatBadgeLabel(format: TickerFormat, customSuffix: string | nu
     case 'CUSTOM': return `CUSTOM (${customSuffix ?? '?'})`;
     default:       return 'RAW';
   }
+}
+
+// ── VPN (Einstellungen) ──────────────────────────────────────
+
+/** Antwort von GET /vpn/info im agent-service-java. */
+export interface VpnInfo {
+  /** Tunnel-Zustand laut Gluetun ("running", "stopped", ...) oder null */
+  status:       string | null;
+  ip:           string | null;
+  city:         string | null;
+  region:       string | null;
+  /** ISO-Ländercode, z.B. "NL" */
+  country:      string | null;
+  organization: string | null;
+  /** Hinweis, wenn Teile der Daten nicht ermittelt werden konnten */
+  error:        string | null;
+}
+
+/** Antwort von POST /vpn/rotate. Fehler stehen im Feld "error" (kein HTTP-Fehler). */
+export interface VpnRotateResult {
+  oldIp:    string | null;
+  newIp:    string | null;
+  changed:  boolean;
+  attempts: number;
+  error:    string | null;
 }

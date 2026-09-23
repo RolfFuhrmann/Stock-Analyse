@@ -1,4 +1,4 @@
 rf/stock/agent/indicator/BullishIndicatorTest.class
+rf/stock/agent/candle/BearishCandlePatternsTest.class
 rf/stock/agent/candle/BullishCandlePatternsTest.class
 rf/stock/agent/indicator/BearishIndicatorTest.class
-rf/stock/agent/candle/BearishCandlePatternsTest.class

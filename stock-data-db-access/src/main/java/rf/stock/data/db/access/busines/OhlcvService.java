@@ -14,7 +14,13 @@ import rf.stock.data.db.access.repository.*;
 import java.time.LocalDate;
 import java.time.LocalDateTime;
 import java.util.ArrayList;
+import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Map;
+import java.util.Optional;
+import java.util.Set;
+import java.util.TreeSet;
+import java.util.stream.Collectors;
 
 @Slf4j
 @Service
@@ -27,6 +33,45 @@ public class OhlcvService {
     private final OhlcvHourlyRepository      hourlyRepo;
     private final OhlcvFourHourlyRepository  fourHourlyRepo;
     private final FetchLogRepository          fetchLogRepo;
+
+    // ── Ticker-Universum (21.09.) ────────────────────────────────────────────
+
+    /**
+     * Alle Ticker, für die tatsächlich OHLCV-Daten vorliegen, mit Zeilenzahl je
+     * Tabelle - Grundlage für die ML-Trainingsauswahl. Bewusst UNABHÄNGIG von
+     * ticker_meta: ticker_meta wird nur vom history-fetcher gepflegt (beim
+     * Abruf für die konfigurierten Listen), während Daten für einen Ticker auch
+     * allein durch den Live-Write-back des agent-service-java entstehen können
+     * (z.B. neu erstellte Listen, die der Fetcher noch nie gesehen hat). Ohne
+     * diese Trennung würde das Training niemals über die dem Fetcher bekannten
+     * Listen hinauskommen.
+     */
+    public List<TickerCoverage> getTickerCoverage() {
+        Map<String, Integer> daily      = toCountMap(dailyRepo.countRowsByTicker());
+        Map<String, Integer> hourly     = toCountMap(hourlyRepo.countRowsByTicker());
+        Map<String, Integer> fourHourly = toCountMap(fourHourlyRepo.countRowsByTicker());
+
+        Set<String> tickers = new TreeSet<>();
+        tickers.addAll(daily.keySet());
+        tickers.addAll(hourly.keySet());
+        tickers.addAll(fourHourly.keySet());
+
+        return tickers.stream()
+            .map(t -> new TickerCoverage(
+                t,
+                daily.getOrDefault(t, 0),
+                hourly.getOrDefault(t, 0),
+                fourHourly.getOrDefault(t, 0)))
+            .toList();
+    }
+
+    private static Map<String, Integer> toCountMap(List<Object[]> rows) {
+        Map<String, Integer> result = new LinkedHashMap<>();
+        for (Object[] row : rows) {
+            result.put((String) row[0], ((Long) row[1]).intValue());
+        }
+        return result;
+    }
 
     // ── TickerMeta ────────────────────────────────────────────────────────────
 
@@ -100,21 +145,48 @@ public class OhlcvService {
     }
 
     /**
-     * Bulk-Einfügen von Tageskerzen.
-     * Bereits vorhandene (ticker + trade_date) werden übersprungen (kein Update),
-     * da historische Schlusskurse sich nicht ändern.
-     * Gibt die Anzahl eingefügter und übersprungener Kerzen zurück.
+     * Bulk-Einfügen von Tageskerzen (Upsert, seit 09.09.).
+     *
+     * Vorher: bereits vorhandene (ticker + trade_date) wurden übersprungen,
+     * nie aktualisiert - Begründung war "historische Schlusskurse ändern
+     * sich nicht". Rolf möchte jetzt zwei zusätzliche Schreibwege auf
+     * denselben Endpunkt zulaufen lassen: (1) agent-service-java schreibt
+     * bei jeder Live-Analyse die letzten paar Tage zurück (siehe
+     * DailyBarWriteBackService dort - der aktuelle, noch laufende
+     * Handelstag ändert sich untertägig mehrfach, ein reines "skip wenn
+     * vorhanden" würde das nie aktualisieren), (2) history-fetcher soll
+     * künftig auch gelegentliche rückwirkende Kurskorrekturen (Splits,
+     * Dividenden-Anpassungen) automatisch übernehmen, statt sie zu ignorieren.
+     *
+     * WICHTIG - Feldname "skipped" bewusst NICHT umbenannt, obwohl er
+     * jetzt "aktualisiert" statt "übersprungen" bedeutet: history-fetcher
+     * (Python, fetcher.py) liest result["skipped"] aus und benutzt
+     * (inserted + skipped) > 0 für den SUCCESS/PARTIAL-Status. Mit
+     * unveränderter Feld-Arithmetik (jede Kerze zählt weiterhin entweder als
+     * inserted oder als skipped, nur die Aktion dahinter hat sich geändert)
+     * bleibt diese Logik korrekt, ohne dass fetcher.py angepasst werden muss.
      */
     @Transactional
     public OhlcvDailyBulkResponse bulkInsertDaily(OhlcvDailyBulkRequest req) {
         int inserted = 0;
-        int skipped  = 0;
+        int skipped  = 0; // semantisch jetzt: "bereits vorhanden, aktualisiert"
 
         for (OhlcvDailyBarRequest bar : req.bars()) {
-            if (dailyRepo.existsByTickerAndTradeDate(req.ticker(), bar.tradeDate())) {
+            Optional<OhlcvDaily> existing = dailyRepo.findByTickerAndTradeDate(req.ticker(), bar.tradeDate());
+
+            if (existing.isPresent()) {
+                OhlcvDaily entity = existing.get();
+                entity.setOpen(bar.open());
+                entity.setHigh(bar.high());
+                entity.setLow(bar.low());
+                entity.setClose(bar.close());
+                entity.setVolume(bar.volume());
+                entity.setSource(req.source());
+                dailyRepo.save(entity);
                 skipped++;
                 continue;
             }
+
             OhlcvDaily entity = OhlcvDaily.builder()
                 .ticker(req.ticker())
                 .tradeDate(bar.tradeDate())
@@ -129,10 +201,10 @@ public class OhlcvService {
             inserted++;
         }
 
-        log.info("ohlcv_daily [{}]: {} eingefügt, {} übersprungen", req.ticker(), inserted, skipped);
+        log.info("ohlcv_daily [{}]: {} neu eingefügt, {} aktualisiert", req.ticker(), inserted, skipped);
         return new OhlcvDailyBulkResponse(
             req.ticker(), inserted, skipped,
-            inserted + " neue Kerzen gespeichert, " + skipped + " bereits vorhanden"
+            inserted + " neue Kerzen gespeichert, " + skipped + " aktualisiert"
         );
     }
 
@@ -155,16 +227,42 @@ public class OhlcvService {
         return sorted.stream().map(this::toHourlyResponse).toList();
     }
 
+    /**
+     * Bulk-Einfügen von Stundenkerzen (Upsert, seit 20.09.).
+     *
+     * Vorher: bereits vorhandene (ticker + trade_time) wurden übersprungen.
+     * Jetzt analog zu bulkInsertDaily: vorhandene Kerzen werden mit den neuen
+     * Werten überschrieben, weil agent-service-java bei jeder Live-1h/4h-
+     * Analyse die letzten Handelstage zurückschreibt (siehe
+     * IntradayBarWriteBackService dort) - die aktuell laufende Stundenkerze
+     * ändert sich untertägig mehrfach, ein reines "skip wenn vorhanden"
+     * würde sie nie aktualisieren.
+     *
+     * Feldname "skipped" bleibt aus demselben Grund wie bei bulkInsertDaily
+     * unverändert (history-fetcher wertet inserted + skipped aus) und
+     * bedeutet jetzt "bereits vorhanden, aktualisiert".
+     */
     @Transactional
     public OhlcvHourlyBulkResponse bulkInsertHourly(OhlcvHourlyBulkRequest req) {
         int inserted = 0;
-        int skipped  = 0;
+        int skipped  = 0; // semantisch jetzt: "bereits vorhanden, aktualisiert"
 
         for (OhlcvHourlyBarRequest bar : req.bars()) {
-            if (hourlyRepo.existsByTickerAndTradeTime(req.ticker(), bar.tradeTime())) {
+            Optional<OhlcvHourly> existing = hourlyRepo.findByTickerAndTradeTime(req.ticker(), bar.tradeTime());
+
+            if (existing.isPresent()) {
+                OhlcvHourly entity = existing.get();
+                entity.setOpen(bar.open());
+                entity.setHigh(bar.high());
+                entity.setLow(bar.low());
+                entity.setClose(bar.close());
+                entity.setVolume(bar.volume());
+                entity.setSource(req.source());
+                hourlyRepo.save(entity);
                 skipped++;
                 continue;
             }
+
             OhlcvHourly entity = OhlcvHourly.builder()
                 .ticker(req.ticker())
                 .tradeTime(bar.tradeTime())
@@ -179,10 +277,10 @@ public class OhlcvService {
             inserted++;
         }
 
-        log.info("ohlcv_hourly [{}]: {} eingefügt, {} übersprungen", req.ticker(), inserted, skipped);
+        log.info("ohlcv_hourly [{}]: {} neu eingefügt, {} aktualisiert", req.ticker(), inserted, skipped);
         return new OhlcvHourlyBulkResponse(
             req.ticker(), inserted, skipped,
-            inserted + " neue Kerzen gespeichert, " + skipped + " bereits vorhanden"
+            inserted + " neue Kerzen gespeichert, " + skipped + " aktualisiert"
         );
     }
 
@@ -206,16 +304,33 @@ public class OhlcvService {
         return sorted.stream().map(this::toFourHourlyResponse).toList();
     }
 
+    /**
+     * Bulk-Einfügen von 4h-Kerzen (Upsert, seit 20.09.) - Begründung siehe
+     * bulkInsertHourly. Vorhandene Kerzen werden überschrieben, damit der
+     * zuletzt (noch unvollständig) aggregierte 4h-Block bei der nächsten
+     * Analyse mit den endgültigen Werten aktualisiert wird.
+     */
     @Transactional
     public OhlcvFourHourlyBulkResponse bulkInsertFourHourly(OhlcvFourHourlyBulkRequest req) {
         int inserted = 0;
-        int skipped  = 0;
+        int skipped  = 0; // semantisch jetzt: "bereits vorhanden, aktualisiert"
 
         for (OhlcvFourHourlyBarRequest bar : req.bars()) {
-            if (fourHourlyRepo.existsByTickerAndTradeTime(req.ticker(), bar.tradeTime())) {
+            Optional<OhlcvFourHourly> existing = fourHourlyRepo.findByTickerAndTradeTime(req.ticker(), bar.tradeTime());
+
+            if (existing.isPresent()) {
+                OhlcvFourHourly entity = existing.get();
+                entity.setOpen(bar.open());
+                entity.setHigh(bar.high());
+                entity.setLow(bar.low());
+                entity.setClose(bar.close());
+                entity.setVolume(bar.volume());
+                entity.setSource(req.source());
+                fourHourlyRepo.save(entity);
                 skipped++;
                 continue;
             }
+
             OhlcvFourHourly entity = OhlcvFourHourly.builder()
                 .ticker(req.ticker())
                 .tradeTime(bar.tradeTime())
@@ -230,10 +345,10 @@ public class OhlcvService {
             inserted++;
         }
 
-        log.info("ohlcv_4h [{}]: {} eingefügt, {} übersprungen", req.ticker(), inserted, skipped);
+        log.info("ohlcv_4h [{}]: {} neu eingefügt, {} aktualisiert", req.ticker(), inserted, skipped);
         return new OhlcvFourHourlyBulkResponse(
             req.ticker(), inserted, skipped,
-            inserted + " neue Kerzen gespeichert, " + skipped + " bereits vorhanden"
+            inserted + " neue Kerzen gespeichert, " + skipped + " aktualisiert"
         );
     }
 
@@ -265,7 +380,21 @@ public class OhlcvService {
 
     // ── Coverage Summary ──────────────────────────────────────────────────────
 
-    /** Übersicht über den gesamten Datenbestand – für Monitoring. */
+    /**
+     * Übersicht über den gesamten Datenbestand – für Monitoring.
+     *
+     * Vorher: pro Ticker 5 sequenzielle Queries (count×3, oldest, newest,
+     * lastStatus) – bei ~70-100 Tickern mehrere hundert Roundtrips PRO
+     * AUFRUF, dazu lud "oldest" für jeden Ticker alle Zeilen ab dem Jahr
+     * 2000 komplett als Entities, nur um die erste zu nehmen. Bei kaltem
+     * MySQL-Cache (z.B. direkt nach einem Neustart) dauerte das spürbar
+     * länger als der 10s-Timeout des aufrufenden history-fetcher.
+     *
+     * Jetzt: jeweils EIN gruppiertes Aggregat-Query für daily/hourly/
+     * fourHourly + EIN Query für die FetchLog-Status, anschließend reines
+     * In-Memory-Zusammenbauen pro Ticker über Map-Lookups (O(1) statt
+     * weiterer Queries).
+     */
     public CoverageSummaryResponse getCoverage() {
         List<TickerMeta> allMeta = metaRepo.findAll();
 
@@ -273,20 +402,28 @@ public class OhlcvService {
         long totalHourly     = hourlyRepo.count();
         long totalFourHourly = fourHourlyRepo.count();
 
-        List<TickerCoverageResponse> tickerCoverage = allMeta.stream().map(meta -> {
-            long daily       = dailyRepo.countByTicker(meta.getTicker());
-            long hourly      = hourlyRepo.countByTicker(meta.getTicker());
-            long fourHourly  = fourHourlyRepo.countByTicker(meta.getTicker());
-            LocalDate oldest = dailyRepo
-                .findByTickerAndTradeDateBetweenOrderByTradeDateAsc(
-                    meta.getTicker(), LocalDate.of(2000, 1, 1), LocalDate.now())
-                .stream().findFirst().map(OhlcvDaily::getTradeDate).orElse(null);
-            LocalDate newest = dailyRepo
-                .findLatestTradeDateByTicker(meta.getTicker()).orElse(null);
+        // ticker -> [count, minDate, maxDate]
+        Map<String, Object[]> dailyAgg = dailyRepo.aggregateByTicker().stream()
+            .collect(Collectors.toMap(row -> (String) row[0], row -> row));
 
-            String lastStatus = fetchLogRepo
-                .findLastSuccess(meta.getTicker(), "daily")
-                .map(f -> f.getStatus()).orElse("NEVER");
+        // ticker -> count
+        Map<String, Long> hourlyAgg = hourlyRepo.countGroupByTicker().stream()
+            .collect(Collectors.toMap(row -> (String) row[0], row -> (Long) row[1]));
+        Map<String, Long> fourHourlyAgg = fourHourlyRepo.countGroupByTicker().stream()
+            .collect(Collectors.toMap(row -> (String) row[0], row -> (Long) row[1]));
+
+        // ticker -> letzter SUCCESS-Status für "daily"
+        Map<String, String> lastStatusByTicker = fetchLogRepo.findLastSuccessPerTicker("daily").stream()
+            .collect(Collectors.toMap(FetchLog::getTicker, FetchLog::getStatus, (a, b) -> b));
+
+        List<TickerCoverageResponse> tickerCoverage = allMeta.stream().map(meta -> {
+            Object[] d = dailyAgg.get(meta.getTicker());
+            long daily            = d != null ? (Long) d[1] : 0L;
+            LocalDate oldest      = d != null ? (LocalDate) d[2] : null;
+            LocalDate newest      = d != null ? (LocalDate) d[3] : null;
+            long hourly           = hourlyAgg.getOrDefault(meta.getTicker(), 0L);
+            long fourHourly       = fourHourlyAgg.getOrDefault(meta.getTicker(), 0L);
+            String lastStatus     = lastStatusByTicker.getOrDefault(meta.getTicker(), "NEVER");
 
             return new TickerCoverageResponse(
                 meta.getTicker(), meta.getCompanyName(),

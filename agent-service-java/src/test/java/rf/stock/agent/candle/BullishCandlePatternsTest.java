@@ -1,8 +1,10 @@
 package rf.stock.agent.candle;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNull;
 
+import java.util.ArrayList;
 import java.util.List;
 
 import org.junit.jupiter.api.Test;
@@ -10,61 +12,86 @@ import org.junit.jupiter.api.Test;
 import rf.stock.agent.model.CandlePatternResult;
 import rf.stock.agent.model.OhlcvBar;
 
+/**
+ * Hammer/Bullish Engulfing/Morning Star/Piercing Line sind seit 23./24.08.
+ * ta4j-basiert (Geometrie nachgebaut aus ta4js RealBodyIndicator/Bar/Num,
+ * siehe BullishCandlePatterns.java-Klassenkommentar) mit einer GD200→GD50→
+ * GD20-Kaskade statt der alten CandleUtils-Trendprüfung als Downtrend-
+ * Vorbedingung. Mit nur ~19-20 Testkerzen ist die "GD200"/"GD50" faktisch
+ * der Durchschnitt aller verfügbaren Kerzen (ta4js SMAIndicator liefert bei
+ * zu wenig Historie einen Partial-Average statt eines Fehlers) - bei den
+ * hier verwendeten, durchgängig fallenden Kursreihen bestätigt GD200 daher
+ * praktisch immer als Erstes den Downtrend (assertEquals(200,
+ * result.gdPeriod()) in den Erkennungs-Tests unten). Ein echter Test für den
+ * Kaskaden-Fallback auf GD50/GD20 (Kurs nur kurzfristig unter dem kürzeren
+ * GD, langfristig aber noch über GD200) bräuchte deutlich mehr als 200
+ * Testkerzen und ist hier bewusst ausgespart.
+ * Abandoned Baby ist von alldem nicht betroffen (weiterhin Eigenentwicklung,
+ * kein GD involviert).
+ */
 class BullishCandlePatternsTest {
 
+    /**
+     * Hammer nutzt seit 06.09. ADX statt der GD-Kaskade (siehe
+     * BullishCandlePatterns-Klassenkommentar) UND zusätzlich HammerOpenRule/
+     * HammerPositionRule, die vorher gar nicht geprüft wurden. Die
+     * Testkerzen unten sind numerisch gegen die echte ta4j-ADX(5)/DI(5)-
+     * Formel vorab verifiziert (siehe HammerPatternTest für Details) - die
+     * frühere Unterscheidung "SMA-Downtrend" vs. "Price-Action-Downtrend"
+     * (aus der alten, jetzt unbenutzten DowntrendRule) ist für Hammer nicht
+     * mehr relevant, da ADX ein einziger, unified Trend-Indikator ist.
+     * gdPeriod ist für Hammer jetzt immer null (kein GD involviert).
+     */
     @Test
     void shouldDetectHammerAfterLowerHighsAndLowerLows() {
 
-        List<OhlcvBar> bars = List.of(
-                // 5 Kerzen Downtrend
-                bar(20.0, 20.5, 19.0, 19.2), // bearish
-                bar(19.3, 19.8, 18.2, 18.4), // bearish
-                bar(18.5, 18.9, 17.5, 17.8), // bearish
-                bar(17.9, 18.2, 16.8, 17.2), // bearish
-                bar(17.3, 17.6, 16.1, 16.5), // bearish
+        List<OhlcvBar> bars = concat(
+                decliningRun(20, 200.0, 2.0),
 
-                // Hammer
-                bar(16.40, 16.55, 14.30, 16.48));
+                // Verifiziert: Vorkerze (letzte der Serie) O=162 H=162.4 L=159.6
+                // C=160, Range=2.8, unteres Drittel bis 160.53. Hammer-Body
+                // [159.7,159.9] liegt darin; unterer Docht 13.5x Body, oberer
+                // Docht 0.75x Body. Open 159.7 < PrevClose 160.
+                List.of(bar(159.7, 160.05, 157.0, 159.9)));
 
         CandlePatternResult result = BullishCandlePatterns.detect(bars);
 
         assertEquals("Hammer", result.pattern());
+        assertNull(result.gdPeriod());
+        assertFalse(result.confirmed());
     }
 
     @Test
     void shouldDetectHammerAfterLowerCloses() {
 
-        List<OhlcvBar> bars = List.of(
-                bar(20.0, 20.6, 19.6, 19.5), // bearish
-                bar(19.6, 20.2, 19.1, 19.0), // bearish
-                bar(19.2, 19.9, 18.9, 18.4), // bearish
-                bar(18.6, 19.4, 18.2, 17.9), // bearish
-                bar(18.0, 18.8, 17.5, 17.3), // bearish
+        List<OhlcvBar> bars = concat(
+                decliningRun(20, 100.0, 1.0),
 
-                // Hammer
-                bar(17.20, 17.35, 15.20, 17.28));
+                // Verifiziert: Vorkerze (letzte der Serie) O=81 H=81.2 L=79.8 C=80,
+                // Range=1.4, unteres Drittel bis 80.27. Hammer-Body [79.9,80.1]
+                // liegt darin; unterer Docht 9.5x Body, oberer Docht 0.25x Body.
+                List.of(bar(79.9, 80.15, 78.0, 80.1)));
 
         CandlePatternResult result = BullishCandlePatterns.detect(bars);
 
         assertEquals("Hammer", result.pattern());
+        assertNull(result.gdPeriod());
+        assertFalse(result.confirmed());
     }
 
     @Test
     void shouldNotDetectHammerWithoutDowntrend() {
 
-        List<OhlcvBar> bars = List.of(
-                bar(20, 21, 19, 20.5),
-                bar(20.5, 21.5, 20, 21),
-                bar(21, 22, 20.5, 21.6),
-                bar(21.6, 22.2, 21.2, 21.8),
-                bar(21.8, 22.5, 21.5, 22.0),
+        List<OhlcvBar> bars = concat(
+                risingRun(20, 12.0, 0.5),
 
-                // Hammerform vorhanden
-                bar(22.0, 22.1, 19.8, 22.05));
+                // Hammerform vorhanden, aber Aufwärtstrend davor (+DI > -DI)
+                List.of(bar(22.0, 22.1, 19.8, 22.05)));
 
         CandlePatternResult result = BullishCandlePatterns.detect(bars);
 
         assertNull(result.pattern());
+        assertNull(result.gdPeriod());
     }
 
     @Test
@@ -141,140 +168,209 @@ class BullishCandlePatternsTest {
         CandlePatternResult result = BullishCandlePatterns.detect(bars);
 
         assertNull(result.pattern());
+        assertNull(result.gdPeriod());
     }
 
     @Test
     void shouldDetectBullishEngulfingAfterLowerHighsAndLowerLowsDowntrend() {
 
-        List<OhlcvBar> bars = List.of(
+        List<OhlcvBar> bars = concat(
+                decliningRun(18, 30.0, 0.75),
 
-                // Downtrend (4 Kerzen)
-                bar(20.0, 20.5, 19.0, 19.2),
-                bar(19.3, 19.8, 18.2, 18.4),
-                bar(18.5, 18.9, 17.5, 17.8),
-                bar(17.9, 18.2, 16.8, 17.2),
+                List.of(
+                        // kleine rote Kerze, Teil des Downtrends
+                        bar(17.3, 17.6, 16.1, 16.5),
 
-                // kleine rote Kerze, Teil des Downtrends
-                bar(17.3, 17.6, 16.1, 16.5),
-
-                // große grüne Kerze engulfed den Body
-                bar(16.4, 17.8, 16.2, 17.6));
+                        // große grüne Kerze engulfed den Body
+                        bar(16.4, 17.8, 16.2, 17.6)));
 
         CandlePatternResult result = BullishCandlePatterns.detect(bars);
 
         assertEquals("Bullish Engulfing", result.pattern());
+        assertNull(result.gdPeriod());
+        assertFalse(result.confirmed());
     }
 
     @Test
     void shouldDetectBullishEngulfingAfterLowerClosesDowntrend() {
 
-        List<OhlcvBar> bars = List.of(
+        List<OhlcvBar> bars = concat(
+                decliningRun(18, 30.0, 0.7),
 
-                // Downtrend (4 Kerzen)
-                bar(20.0, 20.6, 19.6, 19.5),
-                bar(19.6, 20.2, 19.1, 19.0),
-                bar(19.2, 19.9, 18.9, 18.4),
-                bar(18.6, 19.4, 18.2, 17.9),
+                List.of(
+                        // kleine rote Kerze, Teil des Downtrends
+                        bar(17.8, 18.0, 16.5, 16.8),
 
-                // kleine rote Kerze, Teil des Downtrends
-                bar(17.8, 18.0, 16.5, 16.8),
-
-                // engulfing
-                bar(16.6, 18.3, 16.5, 18.2));
+                        // engulfing
+                        bar(16.6, 18.3, 16.5, 18.2)));
 
         CandlePatternResult result = BullishCandlePatterns.detect(bars);
 
         assertEquals("Bullish Engulfing", result.pattern());
+        assertNull(result.gdPeriod());
+        assertFalse(result.confirmed());
     }
 
     @Test
     void shouldNotDetectBullishEngulfingWithoutDowntrend() {
 
-        List<OhlcvBar> bars = List.of(
+        List<OhlcvBar> bars = concat(
+                risingRun(18, 12.0, 0.5),
 
-                bar(20, 21, 19, 20.5),
-                bar(20.5, 21.5, 20, 21),
-                bar(21, 22, 20.5, 21.6),
-                bar(21.6, 22.5, 21.2, 22),
-
-                bar(22.3, 22.5, 21.7, 21.8),
-
-                bar(21.6, 23.0, 21.5, 22.8));
+                List.of(
+                        bar(22.3, 22.5, 21.7, 21.8),
+                        bar(21.6, 23.0, 21.5, 22.8)));
 
         CandlePatternResult result = BullishCandlePatterns.detect(bars);
 
         assertNull(result.pattern());
+        assertNull(result.gdPeriod());
+    }
+
+    @Test
+    void shouldDetectPiercingLineAfterDowntrend() {
+
+        List<OhlcvBar> bars = concat(
+                decliningRun(18, 30.0, 0.75),
+
+                List.of(
+                        // große rote Kerze, Teil des Downtrends
+                        bar(17.3, 17.6, 16.0, 16.3),
+
+                        // Piercing: öffnet unter dem Vortages-Close, schließt weit über der Body-Mitte
+                        bar(16.1, 17.2, 16.0, 17.0)));
+
+        CandlePatternResult result = BullishCandlePatterns.detect(bars);
+
+        assertEquals("Piercing Line", result.pattern());
+        assertEquals(200, result.gdPeriod());
+    }
+
+    @Test
+    void shouldNotDetectPiercingLineWithoutDowntrend() {
+
+        List<OhlcvBar> bars = concat(
+                risingRun(18, 12.0, 0.5),
+
+                List.of(
+                        bar(22.3, 22.6, 21.6, 21.9),
+                        bar(21.7, 23.0, 21.6, 22.7)));
+
+        CandlePatternResult result = BullishCandlePatterns.detect(bars);
+
+        assertNull(result.pattern());
+        assertNull(result.gdPeriod());
     }
 
     @Test
     void shouldDetectMorningStarAfterLowerHighsAndLowerLowsDowntrend() {
 
-        List<OhlcvBar> bars = List.of(
+        List<OhlcvBar> bars = concat(
+                decliningRun(17, 30.0, 0.8),
 
-                // Downtrend (4 Kerzen)
-                bar(20.0, 20.5, 19.0, 19.2),
-                bar(19.3, 19.8, 18.2, 18.4),
-                bar(18.5, 18.9, 17.5, 17.8),
-                bar(17.9, 18.2, 16.8, 17.2),
+                List.of(
+                        // Lange rote Kerze
+                        bar(17.1, 17.3, 15.0, 15.2),
 
-                // Lange rote Kerze
-                bar(17.1, 17.3, 15.0, 15.2),
+                        // Stern
+                        bar(14.8, 14.9, 14.4, 14.7),
 
-                // Stern
-                bar(14.8, 14.9, 14.4, 14.7),
-
-                // Lange grüne Kerze
-                bar(14.8, 17.4, 14.7, 16.8));
+                        // Lange grüne Kerze
+                        bar(14.8, 17.4, 14.7, 16.8)));
 
         CandlePatternResult result = BullishCandlePatterns.detect(bars);
 
         assertEquals("Morning Star", result.pattern());
+        assertEquals(200, result.gdPeriod());
     }
 
     @Test
     void shouldDetectMorningStarAfterLowerClosesDowntrend() {
 
-        List<OhlcvBar> bars = List.of(
+        List<OhlcvBar> bars = concat(
+                decliningRun(17, 30.0, 0.75),
 
-                bar(20.0, 20.6, 19.6, 19.5),
-                bar(19.6, 20.2, 19.1, 19.0),
-                bar(19.2, 19.9, 18.9, 18.4),
-                bar(18.6, 19.4, 18.2, 17.9),
+                List.of(
+                        // Lange rote Kerze
+                        bar(17.8, 18.0, 15.6, 15.8),
 
-                // Lange rote Kerze
-                bar(17.8, 18.0, 15.6, 15.8),
+                        // Stern
+                        bar(15.4, 15.5, 15.1, 15.3),
 
-                // Stern
-                bar(15.4, 15.5, 15.1, 15.3),
-
-                // Lange grüne Kerze
-                bar(15.4, 18.1, 15.3, 17.4));
+                        // Lange grüne Kerze
+                        bar(15.4, 18.1, 15.3, 17.4)));
 
         CandlePatternResult result = BullishCandlePatterns.detect(bars);
 
         assertEquals("Morning Star", result.pattern());
+        assertEquals(200, result.gdPeriod());
     }
 
     @Test
     void shouldNotDetectMorningStarWithoutDowntrend() {
 
-        List<OhlcvBar> bars = List.of(
+        List<OhlcvBar> bars = concat(
+                risingRun(17, 12.0, 0.5),
 
-                bar(20, 21, 19, 20.5),
-                bar(20.5, 21.5, 20, 21),
-                bar(21, 22, 20.5, 21.6),
-                bar(21.6, 22.5, 21.2, 22),
-
-                bar(22.0, 22.2, 19.8, 20.0),
-
-                bar(19.6, 19.7, 19.3, 19.5),
-
-                bar(19.6, 22.3, 19.5, 21.8));
+                List.of(
+                        bar(22.0, 22.2, 19.8, 20.0),
+                        bar(19.6, 19.7, 19.3, 19.5),
+                        bar(19.6, 22.3, 19.5, 21.8)));
 
         CandlePatternResult result = BullishCandlePatterns.detect(bars);
 
         assertNull(result.pattern());
+        assertNull(result.gdPeriod());
     }
+
+    /** Erzeugt `count` konsekutive bearische Kerzen, fallend von startPrice in stepPerBar-Schritten. */
+    private static List<OhlcvBar> decliningRun(int count, double startPrice, double stepPerBar) {
+        List<OhlcvBar> bars = new ArrayList<>();
+        double price = startPrice;
+        for (int i = 0; i < count; i++) {
+            double open = price;
+            double close = price - stepPerBar;
+            double high = open + stepPerBar * 0.2;
+            double low = close - stepPerBar * 0.2;
+            bars.add(bar(open, high, low, close));
+            price = close;
+        }
+        return bars;
+    }
+
+    /** Erzeugt `count` konsekutive bullische Kerzen, steigend von startPrice in stepPerBar-Schritten. */
+    private static List<OhlcvBar> risingRun(int count, double startPrice, double stepPerBar) {
+        List<OhlcvBar> bars = new ArrayList<>();
+        double price = startPrice;
+        for (int i = 0; i < count; i++) {
+            double open = price;
+            double close = price + stepPerBar;
+            double high = close + stepPerBar * 0.2;
+            double low = open - stepPerBar * 0.2;
+            bars.add(bar(open, high, low, close));
+            price = close;
+        }
+        return bars;
+    }
+
+    @SafeVarargs
+    private static List<OhlcvBar> concat(List<OhlcvBar>... parts) {
+        List<OhlcvBar> result = new ArrayList<>();
+        for (List<OhlcvBar> part : parts) {
+            result.addAll(part);
+        }
+        return result;
+    }
+
+    /**
+     * Fortlaufender Zähler statt Fixdatum: ElliottAnalysisUtil.toBarSeries()
+     * (jetzt auch von BullishCandlePatterns genutzt) braucht pro Kerze eine
+     * strikt aufsteigende endTime - die alte CandleUtils-Logik ignorierte das
+     * Datum komplett, daher hatten alle Testkerzen bisher denselben Fixwert
+     * ("2025-01-01"), was jetzt zu einem Fehler bei der BarSeries-Konstruktion
+     * führen würde.
+     */
+    private static int dayOffset = 0;
 
     private static OhlcvBar bar(double open,
             double high,
@@ -282,7 +378,7 @@ class BullishCandlePatternsTest {
             double close) {
 
         return new OhlcvBar(
-                "2025-01-01",
+                java.time.LocalDate.of(2025, 1, 1).plusDays(dayOffset++).toString(),
                 open,
                 high,
                 low,

@@ -100,7 +100,8 @@ src/app/
 ├── models/
 │   └── stock.models.ts     # StockResult (inkl. ML- + Elliott-Chart-Feldern), FilterState, AnalysisSummary
 ├── services/
-│   ├── analysis.service.ts   # SSE-Streaming
+│   ├── analysis.service.ts   # SSE-Streaming (hält per WakeLockService den Rechner wach)
+│   ├── wake-lock.service.ts  # Screen Wake Lock während einer Analyse
 │   ├── ticker-list.service.ts # REST-Calls zum DB-Service
 │   └── pdf-export.service.ts # PDF via Browser-Print (inkl. KI-Spalte, Name-Spalte, Chart-Spalte als statisches SVG)
 ├── shared/
@@ -221,6 +222,39 @@ werden). Das `angular-client`-Dockerfile nutzt außerdem `npm install` statt
 `npm ci` (Grund: `package-lock.json` kann in Claudes Sandbox mangels
 Netzwerkzugriff nicht aktuell gehalten werden, `npm ci` bricht bei jeder
 Abweichung hart ab - siehe 7 für den Trade-off).
+
+**Ruhezustand während der Analyse (20.09.):** Schläft der Mac, friert Docker
+Desktop alle Container ein - die laufende Analyse bricht ab (Software kann das
+nicht umgehen). `WakeLockService` (Screen Wake Lock API) hält den Rechner
+deshalb wach, solange `AnalysisService.streamAnalysis()` läuft (Freigabe im
+Teardown: complete, error und Stop-Button). Grenzen: Der Browser gibt die
+Sperre frei, sobald der Tab nicht sichtbar ist (anderer Tab, minimiert,
+verdeckt) - beim Zurückkehren wird sie neu angefordert; Deckel zuklappen
+schläft trotzdem; nur https/localhost. Ohne API-Unterstützung läuft die
+Analyse wie bisher ohne Sperre.
+
+**Einstellungen / VPN (21.09.):** Zahnrad im Header (`filter-header`) öffnet
+ein Off-Canvas-Panel von rechts (`components/settings-panel`, immer im DOM, damit
+ein laufender IP-Wechsel bei geschlossenem Panel weiterläuft). Es zeigt Status,
+IP, Standort (ISO-Code → deutscher Name per `Intl.DisplayNames`) und Anbieter
+(`VpnService` → `GET /vpn/info`, lädt beim Öffnen und per Aktualisieren-Button)
+und darunter den Button "IP-Adresse ändern" (`POST /vpn/rotate`; gesperrt während
+einer Analyse und während des Wechsels; ESC/Klick auf den Hintergrund schließt).
+
+**Modell-Info zeigt Kalibrierungsstatus (21.09.):** `MlModelInfoComponent` zeigt
+zusätzlich, ob das geladene Modell kalibriert ist (`calibrated`); bei `false`
+(Modell vor dem 21.09. trainiert) erscheint ein Hinweis, dass ein neues
+Training nötig ist, damit der Modellwert eine belastbare Größenordnung hat.
+
+**KI-Signal erklären (21.09.):** Klick auf den KI-Wert in der Ergebnistabelle öffnet
+`MlExplanationModalComponent`: Ausgangswert des Modells, die 8 wichtigsten Merkmale als
+Balken (rechts = erhöht den Wert, links = senkt ihn, jeweils mit aktuellem Wert und
+Prozentpunkten), Rest zusammengefasst, Endwert; dazu ein Einordnungssatz (typischer Wert
+und tatsächlicher Anstiegsanteil je Zeitrahmen). Einstellungen → "KI-Modell"
+(`MlModelInfoComponent` über `MlService` → `GET /ml/info`): Lernziel, Trainingsstand,
+Metriken, Zusammensetzung von Training/Test je Zeitrahmen (Warnhinweis, wenn ein Zeitrahmen
+nicht getestet wurde), Kalibrierung und wichtigste Merkmale. Der Spaltentooltip nennt
+jetzt "5 Kerzen" statt "5 Tage".
 
 ### 3.2 Agent Service (`agent-service/`)
 
@@ -529,6 +563,70 @@ Breakpoints trotzdem greifen). Kein Rebuild nötig, nur `docker compose up -d`.
 - JDK 21 lokal (Mac, Homebrew-Cask `temurin@21`) und alle zugehörigen
   `JAVA_HOME`-Referenzen vollständig entfernt
 
+**Live-Abruf + Write-back in die DB (1d seit 09.09., 1h/4h seit 20.09.):**
+Alle Intervalle werden live von Yahoo/TwelveData abgerufen (4h/1h lasen
+vorher nur aus der DB, `DbClient.fetchQuote()` bleibt als ungenutzter
+DB-Fallback erhalten). Die abgerufenen Kerzen werden zusätzlich asynchron
+(fire-and-forget, Fehler nur geloggt) in die DB zurückgeschrieben:
+`DailyBarWriteBackService` (1d) und `IntradayBarWriteBackService` (1h/4h)
+mit **derselben Regel**: neuesten Zeitstempel des Tickers in der jeweiligen
+Tabelle ermitteln → 5 Handelstage zurückrechnen (`TradingDayUtil`, nur
+Mo-Fr, ohne Feiertage) → alles Abgerufene ab dort schreiben. Der DB-Service
+macht daraus einen Upsert (vorhandene Kerzen überschrieben, fehlende
+ergänzt), Ticker ohne DB-Daten: alles schreiben. Der Write-back schließt die Lücke zwischen
+letztem DB-Eintrag und jetzt (bei 4h/1h im Live-Test bestätigt: BA 4h,
+7 neu + 11 aktualisiert). Ältere Lücken (mehr als 5 Handelstage vor dem
+letzten DB-Eintrag) bleiben unberührt - die füllt nur der history-fetcher,
+der parallel als Sicherheitsnetz aktiv bleibt.
+
+| Quelle     | Ansicht | Abruf                    | Geschrieben in                              |
+| ---------- | ------- | ------------------------ | ------------------------------------------- |
+| Yahoo      | 1d      | 1d                       | `ohlcv_daily`                               |
+| Yahoo      | 1h / 4h | 1h (kein natives 4h)     | `ohlcv_hourly` + aus 1h berechnet `ohlcv_4h` |
+| TwelveData | 1d      | `1day`                   | `ohlcv_daily`                               |
+| TwelveData | 1h      | `1h`                     | `ohlcv_hourly`                              |
+| TwelveData | 4h      | `4h` (nativ)             | `ohlcv_4h`                                  |
+
+Aus TwelveData-1h werden bewusst **keine** 4h-Kerzen berechnet (native
+TwelveData-4h-Blöcke haben andere Grenzen, z.B. NYSE 09:30/13:30).
+`IntradayBarUtil` (Paket `util`) bildet die Python-Logik des history-fetchers
+1:1 nach (`_parse_bars_hourly` + `_aggregate_1h_to_4h`, mit identischem
+Input gegen die Python-Referenz geprüft): Zeitstempel auf die ersten 19
+Zeichen kürzen (lokale Börsenzeit ohne Zone, Leerzeichen → `T`), 4h-Blockstart
+= Stunde auf 0/4/8/12/16/20 abgerundet, Blöcke mit < 2 Kerzen verworfen.
+Die Normalisierung ist zugleich Voraussetzung für die Analyse:
+`ElliottAnalysisUtil.parseBarDate()` kann Yahoo-Zeitstempel mit Offset
+(`...+02:00`) nicht lesen. `outputsize` bei Yahoo ist auf 600 gedeckelt
+(`YAHOO_HOURLY_MAX_OUTPUTSIZE`, Wert aus dem history-fetcher) - reicht für
+180 4h-Kerzen bei Xetra-Werten (3 Blöcke/Tag), bei US-Werten (2/Tag) nur für
+ca. 130. TwelveData-Free-Plan: der Live-Abruf verbraucht ab jetzt auch bei
+4h/1h Credits (1 pro Ticker, 8 Requests/Minute).
+
+**VPN-Steuerung (21.09.):** `VpnController`/`VpnService` vermitteln zwischen
+Client und Gluetun (der Browser darf nicht direkt an Gluetun: CORS, Auth):
+- `GET /vpn/info` → `{status, ip, city, region, country, organization, error}`
+  (Status von Gluetun, IP/Standort von yahoo-service `/ip`). Die Gluetun-Antwort
+  wird als Text gelesen und selbst geparst (WebClient dekodiert nur bei passendem
+  Content-Type); ist der Status nicht abrufbar, steht der Grund im Feld `error`
+  und als WARNING im Log.
+- `POST /vpn/rotate` → `{oldIp, newIp, changed, attempts, error}`: Tunnel per
+  `PUT /v1/vpn/status` stoppen (3 s Pause) und starten, dann alle 3 s die
+  Ausgangs-IP abfragen (max. 90 s). Bleibt die IP gleich, bis zu 3 Versuche.
+  Fehler stehen im Feld `error` (HTTP 200), nicht als HTTP-Fehler. Parallele
+  Wechsel werden abgewiesen. Der Ablauf läuft per `cache()` unabhängig vom
+  HTTP-Aufrufer zu Ende (Tab schließen darf das VPN nicht gestoppt
+  zurücklassen); nach einem Fehler wird best effort `running` nachgeschoben.
+- Konfiguration: `services.vpn-control-url` (Env `VPN_CONTROL_URL`, Default
+  `http://vpn:8000`).
+- Server-seitig gibt es keine Sperre gegen laufende Analysen - der Client sperrt
+  den Button während einer Analyse (Yahoo-Abrufe würden sonst abbrechen).
+
+**ML-Erklärung (21.09.):** `MlClient` übernimmt das Feld `explanation` des ml-service
+(Modell `MlExplanation`, dieselben snake_case-Namen) und `AnalysisService.withMlSignal`
+setzt es als `ml_explanation` ins `StockResult`; `null`, wenn der ml-service keine
+liefert (ältere Modelle/Fehler). Neuer Endpunkt `GET /ml/info` (`MlController`) reicht
+`/model/info` des ml-service durch, bei Ausfall `{model_ready:false, error}`.
+
 ### 3.2c Bekannte offene Punkte in agent-service-java
 
 - **Uptrend-Peak-Erkennung** (`BullishIndicator.detectUptrendPeakWithCorrection`):
@@ -556,25 +654,83 @@ Breakpoints trotzdem greifen). Kein Rebuild nötig, nur `docker compose up -d`.
 - **Frontend-Elliott-Wave-Chart-Visualisierung ("Option C"): umgesetzt (19.08.),
   siehe 3.1.** Kein offener Punkt mehr, außer der unten genannten Performance-
   Frage bei sehr großen Listen.
-- **Candle-Pattern-Erkennung eventuell auf ta4j umstellen (Idee, 19.08., noch
-  nicht begonnen):** Rolf zieht in Erwägung, die eigenentwickelte
-  `BullishCandlePatterns`/`BearishCandlePatterns`-Erkennung durch ta4js
-  `org.ta4j.core.indicators.candles.*` zu ersetzen. Recherche-Ergebnis:
-  ta4j deckt Hammer, Morning Star, Bullish Engulfing und Piercing ab (direkte
-  Ersatzkandidaten), hat aber **kein "Abandoned Baby"** (aktuell unser
-  stärkstes Muster, Strength 5) - müsste weiter eigenentwickelt bleiben oder
-  entfallen. ta4js Trendkontext-Vorbedingung basiert auf **ADX/+DI/-DI**
-  (Schwellwert 25), unsere eigene `hasDowntrendBefore()` dagegen auf
-  bestätigten ZigZag-Schwüngen - strukturell verschieden, Treffermenge würde
-  sich vermutlich spürbar verschieben, nicht nur kosmetisch. Es gibt zudem
-  zwei ta4j-Implementierungen für Piercing (`PiercingIndicator` vs.
-  `PiercingLineIndicator`) und Dark Cloud (`DarkCloudIndicator` vs.
-  `DarkCloudCoverIndicator`) - Auswahl nötig. ta4j liefert außerdem kein
-  eingebautes Scoring/Priorisierung (nur `true`/`false` je Bar) - die
-  "erstes Match gewinnt"-Kaskade mit Stärke-Ranking (`CandlePatternResult`)
-  müsste weiterhin selbst darum herum gebaut werden. **Empfehlung an Rolf:**
-  erst den aktuell laufenden Elliott-Wellen-Praxistest abschließen, bevor eine
-  zweite bewegliche Komponente (Candle-Erkennung) gleichzeitig verändert wird.
+- **Bullische UND bearische Candle-Pattern-Erkennung auf ta4j umgestellt
+  (23./24.08.), AUSSER jeweils Abandoned Baby:**
+  `BullishCandlePatterns.java` (Hammer, Morning Star, Bullish Engulfing,
+  Piercing Line) und `BearishCandlePatterns.java` (Shooting Star, Bearish
+  Engulfing, Dark Cloud Cover) nutzen jetzt ta4js Bausteine statt der alten
+  `CandleUtils`-Eigenentwicklung. **Abandoned Baby bleibt in beiden Klassen
+  unverändert Eigenentwicklung** - dafür gibt es keinen ta4j-Indikator
+  (Priorität/Strength 5, weiterhin zuerst geprüft).
+  **Wichtige Korrektur (23.08., nach Prüfung des echten ta4j-0.24.1-JARs -
+  Rolf hatte es als `.jar` hochgeladen, javap fehlte im Sandbox-Container,
+  daher eigener Konstantenpool-Parser gebaut):** Eine zunächst angenommene
+  Rule-Injection in ta4js Candle-Indikator-Konstruktoren
+  (`new HammerIndicator(series, downTrendRule)`) **existiert in 0.24.1
+  NICHT** - alle Hammer-/MorningStar-/Piercing-/ShootingStar-/DarkCloud-
+  Klassen binden ihre Trendprüfung weiterhin fest an einen internen,
+  nicht austauschbaren ADX-basierten `DownTrendIndicator`/`UpTrendIndicator`
+  (byte-identisch zu 0.22.7). Deshalb: Geometrie mit ta4js eigenen,
+  wiederverwendbaren Bausteinen (`RealBodyIndicator`, `Bar`/`Num`)
+  nachgebaut - identische Formeln/Default-Schwellwerte wie in ta4js
+  Originalklassen, aber ohne deren eingebaute Trendprüfung. Jede einzelne
+  dabei verwendete Methode/Konstruktor-Signatur wurde gegen den echten
+  0.24.1-Bytecode verifiziert (nicht nur gegen die vendorte 0.22.7-Quelle
+  geraten). Bullish/Bearish Engulfing haben in ta4j ohnehin **keine**
+  eingebaute Trendprüfung - dort wird ta4js `BullishEngulfingIndicator`/
+  `BearishEngulfingIndicator` unverändert für die reine Geometrie
+  übernommen.
+  **ta4j-Version auf 0.24.1 angehoben** (`pom.xml`, vorher 0.22.7).
+  **GD200→GD50→GD20-Kaskade (24.08., Rolfs Wunsch) statt einer festen
+  GD20-Prüfung:** jedes Muster wird zuerst gegen GD200 auf Trend geprüft,
+  dann GD50, dann GD20 - der erste GD, der bestätigt, gewinnt (`gdPeriod`
+  im Ergebnis). Bullish: Schlusskurs UNTER dem GD (Downtrend). Bearish:
+  Schlusskurs ÜBER dem GD (Uptrend). Gemeinsame Kaskaden-/Chart-Logik in
+  neuer Klasse `CandleGdCascade.java` ausgelagert (von beiden
+  Pattern-Klassen genutzt, `boolean downtrend`-Parameter steuert die
+  Vergleichsrichtung), um sie nicht doppelt zu pflegen.
+  **Chart-Visualisierung im Frontend (24.08.):** neue Modelle
+  `CandleChartData`/`CandleGdPoint` (Bars + GD-Linien-Werte + Datum der
+  Muster-Kerze(n)), durchgereicht bis `StockResult.candle_chart`/
+  `candle_gd_period`. Neue Angular-Komponenten
+  `candle-pattern-chart-thumbnail`/`candle-pattern-chart-modal` (Struktur an
+  die Elliott-Chart-Komponenten angelehnt) - neue Spalte "Muster-Chart" in
+  der Ergebnistabelle, Klick öffnet Modal mit Kerzen + GD-Linie + markierter
+  Muster-Kerze, Titel z.B. "Hammer unterhalb GD200" bzw. "Shooting Star
+  oberhalb GD200" (Richtung wird aus dem Musternamen abgeleitet,
+  `BEARISH_PATTERNS`-Set in `results-table.component.ts` - **beim ersten
+  Entwurf war das Modal fest auf "unterhalb" verdrahtet, was für bearische
+  Muster falsch war; noch in derselben Session korrigiert**). Candlestick-
+  Pattern-Badge zeigt zusätzlich "(GD200)" - in Tabelle UND PDF (PDF nur als
+  Text, keine Chart-Grafik dort - bewusst ausgelassen, siehe unten).
+  **Tests:** `BullishCandlePatternsTest.java`/`BearishCandlePatternsTest.java`
+  - Downtrend-/Uptrend-Präfixe auf ≥18-19 Kerzen verlängert
+  (`decliningRun()`/`risingRun()`-Hilfsmethoden), da die SMA-Kaskade mehr
+  Historie braucht als die alte, kürzere `hasDowntrendBefore()`/
+  `hasUptrendBefore()`-Prüfung. Der `bar()`-Test-Helper musste von einem
+  konstanten Fixdatum ("2025-01-01" für jede Kerze) auf fortlaufend
+  eindeutige Daten umgestellt werden - `ElliottAnalysisUtil.toBarSeries()`
+  (jetzt auch von beiden Pattern-Klassen genutzt, dafür **public** gemacht -
+  ein erster Deploy-Versuch schlug fehl, weil nur die Methode, nicht aber
+  die umgebende Klasse public war) braucht pro Kerze eine strikt
+  aufsteigende `endTime`, was die alte `CandleUtils`-Logik nie interessiert
+  hat. Piercing-Line- und Shooting-Star-/Dark-Cloud-Cover-/Bearish-
+  Engulfing-Tests waren im ursprünglichen Test-Suite z.T. gar nicht bzw.
+  ohne GD-Kompatibilität abgedeckt - ergänzt. Abandoned-Baby-Tests (beide
+  Klassen) unverändert, kein GD-Bezug.
+  **Piercing-/Dark-Cloud-Variantenwahl:** `PiercingLineIndicator` statt
+  `PiercingIndicator`, `DarkCloudCoverIndicator` statt `DarkCloudIndicator`
+  (jeweils neuer, @since 0.22.3, explizit konfigurierbare Gap-/Penetrations-
+  Schwellen statt fest verdrahtet). ta4j liefert kein eingebautes
+  Scoring/Priorisierung (nur `true`/`false` je Bar) - die "erstes Match
+  gewinnt"-Kaskade mit Stärke-Ranking (`CandlePatternResult`) bleibt daher
+  weiterhin selbst gebaut.
+  **Noch offen:** GD-Kalibrierung (Periodenlänge, evtl. Steigungskriterium
+  statt reinem Preisvergleich) an echten Marktdaten nicht validiert - Rolfs
+  eigene Einschätzung dazu: "Die Praxis wird zeigen ob es tatsächlich
+  funktioniert" (24.08.). PDF-Chart-Grafik für Candle-Patterns fehlt
+  (analog zum Elliott-Chart-SVG wäre das ein eigener SVG-Renderer, aus
+  Zeitgründen ausgelassen).
 - **Build-Verifikation: erledigt (22.08.).** `mvn compile` (agent-service-java)
   und `npm install && ng build` (angular-client) von Rolf lokal erfolgreich
   durchlaufen. Kein offener Punkt mehr.
@@ -618,6 +774,29 @@ Breakpoints trotzdem greifen). Kein Rebuild nötig, nur `docker compose up -d`.
   nicht geprüft:** jede Tabellenzeile mit `elliott_chart`-Daten bekommt eine
   eigene echte `lightweight-charts`-Instanz als Thumbnail - bei Komplettläufen
   eventueller Performance-Engpass, Alternative bei Bedarf: Sparkline-SVG.
+- **Zeitstempel-Konvention der Intraday-Tabellen (20.09., per DB-Stichprobe
+  bestätigt):** `ohlcv_hourly`/`ohlcv_4h` enthalten **lokale Börsenzeit ohne
+  Zone**, nicht UTC (ADS.DE: letzte Stundenkerze 17:00, 4h-Blöcke
+  08:00/12:00/16:00; AAPL: 09:30/14:30/15:30, 4h-Blöcke 09:30/13:30 nativ von
+  TwelveData). Die falschen "UTC"-Kommentare in den Entities `OhlcvHourly`/
+  `OhlcvFourHourly` und in den Docstrings von `data_client.py` (history-fetcher)
+  sind am 20.09. korrigiert. In den Flyway-Migrationen `V4`/`V5` stehen sie
+  weiterhin (Dateien NICHT ändern - Checksumme).
+  **Kleiner Fehler im history-fetcher:** `fetcher.py` (Update-Lauf) berechnet
+  die fehlenden Stunden/4h-Blöcke mit `datetime.utcnow()` minus dem letzten
+  DB-Zeitstempel - der ist aber lokale Börsenzeit. Ergebnis: Xetra ca. 2 h zu
+  wenig, NYSE ca. 4 h zu viel Lücke; wegen Puffer und Upsert harmlos, bei
+  Gelegenheit auf die lokale Zeit der Börse umstellen.
+  Der Write-back des agent-service-java folgt dem tatsächlichen Verhalten.
+- **Unfertige Kerzen in der DB (20.09., Stichprobe):** Vor dem Upsert-Umbau
+  blieben untertägig abgerufene, noch laufende Kerzen dauerhaft stehen (ADS.DE
+  15:00-Stundenkerze mit Volumen 4.430, abgerufen 15:44; AAPL 09:30-Kerze
+  mit 93.445 Volumen, abgerufen 15:49) - dadurch auch die daraus
+  aggregierten 4h-Blöcke unvollständig. Werden durch den Upsert beim nächsten
+  Write-back bzw. `/fetch/update` innerhalb der 5-Tage-Marge korrigiert.
+  `fetched_at` bleibt beim Upsert unverändert (Erst-Schreibzeit).
+- **Yahoo-Stundendaten-Tiefe:** `YAHOO_HOURLY_MAX_OUTPUTSIZE = 600` ist aus dem
+  history-fetcher übernommen, nicht selbst gegen Yahoo ausgetestet.
 - **Klären: Python-`agent-service` (Port 8010) noch aktiv oder durch
   `agent-service-java` ersetzt?**
 - **`stock-data-db-access`: README/Doku für Java-25-Stand ergänzen**
@@ -651,6 +830,15 @@ Namen mitschickte - `agent-service-java`s Fallback-Kette `longName` →
 statt Attributzugriff, da einzelne Felder je nach Instrument (z.B. Indizes)
 fehlen können.
 
+**Ausgangs-IP `GET /ip` (21.09.):** liefert `{ip, city, region, country,
+organization}` der IP, unter der der Container im Internet erscheint (= VPN-IP,
+Anbieter nacheinander: `ipinfo.io/json`, `ipwho.is`, `ipapi.co/json`, zuletzt
+`api.ipify.org` nur mit IP - IPs von Gratis-VPN-Servern werden von einzelnen
+IP-Datenbanken abgelehnt, HTTP 429; Fehlschläge stehen als WARNING im Log). `ip: null`,
+wenn keine Verbindung besteht (Tunnel im Aufbau/gestoppt). Genutzt vom
+agent-service-java für die VPN-Anzeige und das Warten auf den Tunnel nach dem
+IP-Wechsel.
+
 ### 3.4 TwelveData Service (`twelvedata-service/`)
 
 | Eigenschaft   | Wert                                |
@@ -678,13 +866,58 @@ NICHT eingebaut). Namens-Lücke wird stattdessen rein clientseitig über die
 `displayName`-Werte der Abrufliste geschlossen (siehe 3.1, "Namens-Fallback
 für `twelvedata-service`").
 
+**Log-Hygiene API-Key (20.09.):** httpx loggt auf INFO jede Request-URL
+inklusive `apikey=...`. `main.py` setzt den `httpx`-Logger daher auf WARNING
+und schwärzt `apikey=` in Fehlermeldungen (`_redact`), da diese auch als
+`error` im SSE-Event bis zum Client durchgereicht werden. Der Key stand vorher
+im Klartext in den Logs (und im Chat) - nach diesem Leak den Key bei TwelveData neu erzeugen.
+
 ### 3.5 VPN Gateway (`vpn` / Gluetun)
 
 - Image: `qmcgaw/gluetun`
 - Provider: Proton VPN (WireGuard, Free-Server, Niederlande)
 - Konfiguration: Root `.env` (WireGuard-Keys, Länder, Subnetz)
 - Alias `yahoo-service` im `stock-net` → Port 8011 wird weitergeleitet
-- IP-Wechsel: `docker exec vpn kill -HUP 1`
+- IP-Wechsel: per Button im Client (Zahnrad → Einstellungen, siehe unten) oder
+  manuell über den Steuerungs-Server / `docker exec vpn kill -HUP 1`
+- **Steuerungs-Server (Port 8000, seit 21.09. in Gebrauch):** Aktuelle Gluetun-
+  Versionen sperren alle Routen, solange keine Auth-Konfiguration existiert
+  (Antwort "Unauthorized"). `gluetun-auth/config.toml` (Host, neben der
+  docker-compose.yml) wird nach `/gluetun/auth/config.toml:ro` gemountet und gibt
+  ohne Login nur diese Routen frei: `GET /v1/publicip/ip`, `GET /v1/vpn/status`,
+  `PUT /v1/vpn/status` (`auth = "none"`, Port 8000 ist NICHT veröffentlicht,
+  nur im Docker-Netz `stock-net` als `http://vpn:8000` erreichbar). **Niemals
+  `/v1/vpn/settings` freigeben** - die Route liefert die WireGuard-Schlüssel.
+  Nach Änderung an der Datei: `docker compose up -d --force-recreate vpn yahoo-service`
+  (yahoo-service läuft im Netzwerk des vpn-Containers und muss mit neu erstellt werden).
+- **IP-Wechsel-Mechanik (getestet 21.09.):** `PUT /v1/vpn/status` mit `stopped`, dann
+  `running` verbindet zu einem (zufällig) gewählten Server des gefilterten Pools -
+  Test: Server 185.107.56.49 → 89.38.99.72, Ausgangs-IP 185.107.56.50 → 89.38.99.79.
+  Pool bei `FREE_ONLY=on`, `SERVER_COUNTRIES=Netherlands` ist klein, derselbe
+  Server kann wiederkommen (daher bis zu 3 Versuche). **Gluetuns eigene
+  Route `/v1/publicip/ip` bleibt nach einem Neustart leer** ("all fetchers failed"
+  direkt nach dem Tunnelaufbau) - IP und Standort werden deshalb über
+  `yahoo-service GET /ip` ermittelt. Ein Neustart des Tunnels über die API, der
+  nie mit `running` abgeschlossen wird, lässt das VPN dauerhaft gestoppt
+  (Killswitch, kein Yahoo-Abruf mehr) - `docker compose up -d --force-recreate
+  vpn yahoo-service` holt es zurück.
+
+- **Server-Pool (Stand 21.09., Quelle: gluetun-servers-Repo, Liste vom 06.08.2026):**
+  Der Steuerungs-Server hat KEINE Route zum Auslesen der verfügbaren Länder/Server
+  (nur `GET /v1/vpn/settings`, das die WireGuard-Schlüssel enthält - nicht
+  freigeben) und Länder lassen sich zur Laufzeit nicht ändern (Doku kennt nur GET
+  auf settings). Die Serverliste steckt in Gluetun selbst
+  (`docker run --rm qmcgaw/gluetun format-servers -protonvpn`) bzw. im Repo
+  `qdm12/gluetun-servers` (`pkg/servers/protonvpn.json`, Felder u.a. `free`, `ips`).
+  Freie WireGuard-Server: 50 in 10 Ländern - USA 21, Kanada 7, Niederlande 4,
+  Singapur 4, Japan 3, Norwegen 3, Rumänien 3, Schweiz 3, Mexiko 1, Polen 1.
+  Die Niederlande-Liste enthält die zwei bisher beobachteten Endpunkte
+  (185.107.56.49 = NL-FREE#125, 89.38.99.72 = NL-FREE#129) sowie
+  149.34.244.174 und 185.132.134.35. Endpunkt-IP ≠ Ausgangs-IP (Beispiel:
+  Endpunkt 89.38.99.72 → Ausgangs-IP 89.38.99.79); für Yahoo zählt die
+  Ausgangs-IP, sie ist erst nach dem Verbinden bekannt (`yahoo-service /ip`).
+  Länderwechsel nur über `SERVER_COUNTRIES` in der `.env` +
+  `docker compose up -d --force-recreate vpn yahoo-service`.
 
 ### 3.6 DB Access Service (`stock-data-db-access/`)
 
@@ -694,7 +927,7 @@ für `twelvedata-service`").
 | Framework    | Spring Boot 4.1                   |
 | Port         | 8013                              |
 | Datenbank    | MySQL 9.7                         |
-| Migrations   | Flyway (V1–V4)                    |
+| Migrations   | Flyway (V1–V5)                    |
 
 **Datenbanktabellen:**
 
@@ -705,6 +938,7 @@ für `twelvedata-service`").
 | `ticker_meta`   | Normalisierte API-Symbole + Stammdaten         |
 | `ohlcv_daily`   | Tageskerzen (5 Jahre, ~1.250 pro Ticker)       |
 | `ohlcv_hourly`  | Stundenkerzen (12 Monate, ~5.000 pro Ticker)   |
+| `ohlcv_4h`      | 4h-Kerzen (Yahoo: aus 1h berechnet, TwelveData: nativ) |
 | `fetch_log`     | Protokoll aller Datenabrufe                    |
 
 **Wichtige Endpunkte (OHLCV):**
@@ -713,8 +947,10 @@ für `twelvedata-service`").
 | ------ | --------------------------------- | -------------------------------- |
 | GET    | `/api/ohlcv/meta`                 | Alle Ticker-Metadaten            |
 | GET    | `/api/ohlcv/daily/{ticker}/latest?n=90` | Neueste N Tageskerzen      |
-| POST   | `/api/ohlcv/daily/bulk`           | Bulk-Insert Tageskerzen          |
-| POST   | `/api/ohlcv/hourly/bulk`          | Bulk-Insert Stundenkerzen        |
+| POST   | `/api/ohlcv/daily/bulk`           | Bulk-Upsert Tageskerzen (seit 09.09.) |
+| POST   | `/api/ohlcv/hourly/bulk`          | Bulk-Upsert Stundenkerzen (seit 20.09.) |
+| POST   | `/api/ohlcv/4h/bulk`              | Bulk-Upsert 4h-Kerzen (seit 20.09.) |
+| GET    | `/api/ohlcv/tickers`              | Ticker mit tatsächlichen Daten + Zeilenzahl je Tabelle (seit 21.09., Basis der ML-Trainingsauswahl) |
 | POST   | `/api/ohlcv/fetch-log`            | Abruf-Protokoll schreiben        |
 | GET    | `/api/ohlcv/coverage`             | Datenbestand-Übersicht           |
 
@@ -727,11 +963,28 @@ für `twelvedata-service`").
 | Port         | 8014                              |
 | Version      | 1.0.0 (fix: TwelveData interval)  |
 
-**Verhalten:**
-- Beim ersten Start: prüft ob Daten vorhanden → startet Erstbefüllung automatisch (AUTO_INITIAL_RUN=true)
-- Erstbefüllung: 5 Jahre Tagesdaten + Stundendaten für alle 4 Listen
-- Täglicher Update-Lauf: 20:00 Uhr (nur neue Kerzen seit letztem Abruf)
-- Idempotent: bereits vorhandene Kerzen werden übersprungen
+**Verhalten (seit 20.09.: nur manuell):**
+- **Läuft NICHT automatisch.** Standard `AUTO_RUN_ENABLED=false` (Env, `config.py`
+  `auto_run_enabled`): kein täglicher Cron-Lauf, kein Catch-up beim Container-
+  Start, kein Scheduler. Der Fetcher ist ein Reparaturwerkzeug: Aktuell
+  gehalten werden aktiv genutzte Ticker durch den Write-back des
+  agent-service-java (1d, 1h, 4h). Die frühere Variable `AUTO_INITIAL_RUN`
+  wird nicht mehr gelesen (kann in der docker-compose.yml entfallen, ebenso
+  `DAILY_UPDATE_HOUR/-MINUTE`).
+- Manuell: `POST /fetch/update` holt fehlende Kerzen nach (pro Ticker ab dem
+  letzten DB-Zeitstempel), `POST /fetch/initial` ruft alles neu ab
+  (5 Jahre Tagesdaten + Stunden-/4h-Kerzen für alle 4 Listen) und
+  **überschreibt vorhandene Kerzen** im abgerufenen Fenster (Upsert; nichts
+  wird gelöscht). Läuft schon ein Abruf, antwortet der Fetcher mit "busy".
+- **Listen dynamisch (seit 21.09.):** `_get_all_tickers()` holt die Codes ALLER
+  angelegten Listen über `GET /api/lists` (vorher fest codiert:
+  `DAX40, DOW30, INDIZES, INTERNATIONALE RTF'S` in `fetcher.py` - eine neue
+  Liste brauchte bis dahin eine Codeänderung hier, um überhaupt eine
+  Erstbefüllung zu bekommen).
+- Optional: `AUTO_RUN_ENABLED=true` schaltet den täglichen Lauf (20:00,
+  `misfire_grace_hours=12` gegen Host-Schlaf) und den Catch-up bei jedem
+  Container-Start wieder ein.
+- `GET /status` zeigt `auto_run_enabled`, `running` und den letzten Lauf.
 
 **Endpunkte:**
 
@@ -739,8 +992,8 @@ für `twelvedata-service`").
 | ------ | ----------------- | ------------------------------------ |
 | GET    | `/health`         | Status + Scheduler-Info              |
 | GET    | `/status`         | Letzter Lauf + nächster geplanter    |
-| POST   | `/fetch/initial`  | Erstbefüllung manuell starten        |
-| POST   | `/fetch/update`   | Update-Lauf manuell starten          |
+| POST   | `/fetch/initial`  | Alles neu abrufen (überschreibt)     |
+| POST   | `/fetch/update`   | Fehlende Kerzen nachholen (Reparatur)|
 | GET    | `/coverage`       | Proxy → DB-Service Coverage          |
 
 **Kritische Konfiguration:**
@@ -762,45 +1015,141 @@ ticker_delay_sec     = 0.5   # zwischen Yahoo-Tickern
 | Modell       | XGBoost (xgb_reversal.joblib)     |
 | Features     | 38 technische Indikatoren         |
 
-**Was das Modell tut:**
-- Lernt aus 5 Jahren OHLCV-History aller Ticker
-- Label: Steigt der Kurs in den nächsten 5 Tagen um mehr als 3%? (ja=1 / nein=0)
-- Zeitreihen-Split 80/20 (kein zufälliges Shufflen → kein Data-Leakage)
-- Klassen-Gewichtung: Umkehrpunkte sind selten → pos_weight automatisch berechnet
+**Warum das KI-Signal bisher nur bei DAX40/DOW30 erschien (Befund + Fix, 21.09.):**
+Zwei unabhängige Ursachen, beide behoben:
+1. **Trainingsauswahl war an ticker_meta gekoppelt.** `ml-service` holte seine
+   Trainings-Ticker über `GET /api/ohlcv/meta` (`ticker_meta`-Tabelle). Diese
+   Tabelle pflegt AUSSCHLIESSLICH der history-fetcher beim Abruf für seine
+   eigenen Listen - der Live-Write-back des agent-service-java (der für JEDEN
+   analysierten Ticker Kerzen schreibt) hat `ticker_meta` nie berührt. Ein
+   Ticker aus einer neuen, vom Fetcher nie gesehenen Liste bekam dadurch nie
+   OHLCV-Daten für 210+ Zeilen und tauchte im Training nie auf - Vorhersagen
+   selbst brauchen aber kein Training FÜR den Ticker (ein XGBoost-Modell ist
+   nicht pro Ticker parametrisiert), sie scheiterten nur an fehlenden Daten.
+   **Fix:** neuer Endpunkt `GET /api/ohlcv/tickers` in stock-data-db-access
+   (zählt direkt in den OHLCV-Tabellen, unabhängig von ticker_meta/Listen);
+   `ml-service` nutzt ihn jetzt für die Trainingsauswahl.
+2. **history-fetcher kannte nur 4 fest eingetragene Listen-Codes**
+   (`DAX40, DOW30, INDIZES, INTERNATIONALE RTF'S` in `fetcher.py`) - eine neu
+   angelegte Liste bekam nie eine vollständige Backfüllung über
+   `/fetch/initial`, sondern musste sich rein über den Live-Write-back
+   (Cutoff 5 Handelstage) langsam aufbauen. **Fix:** `_get_all_tickers()` holt
+   die Codes jetzt dynamisch über `GET /api/lists` (neue Funktion
+   `get_all_list_codes()` in `db_client.py`) - jede vorhandene Liste,
+   einschließlich neu erstellter, wird von `/fetch/initial`/`/fetch/update`
+   erfasst. Der Fetcher bleibt weiterhin nur manuell startbar (siehe oben);
+   für eine neue Liste empfiehlt sich einmal `POST /fetch/initial`, statt auf
+   die schrittweise Live-Befüllung zu warten.
 
-**Top-Features (aus Trainings-Ergebnis):**
-1. `vol_20d` – Volatilität 20 Tage (11.8%) – dominiert deutlich
-2. `vol_10d` – Volatilität 10 Tage (6.7%)
-3. `dist_52w_high` – Abstand 52-Wochen-Hoch (3.7%)
-4. `dist_sma50` – Abstand SMA 50 (3.0%)
-5. `lower_wick` – Unterer Kerzendocht (2.7%)
+Nach diesen beiden Fixes braucht eine neue Liste zwei Dinge, damit sie ein
+KI-Signal bekommt: genug OHLCV-Zeilen in der DB (per `/fetch/initial` sofort,
+sonst nach ein paar Live-Analysen) und ein Training NACH Punkt 1 (damit der
+Ticker in `feature_importance`/Diagnose auftaucht - für die reine Vorhersage
+reicht schon das bestehende Modell, sobald genug Zeilen da sind).
 
-**Backtesting-Ergebnis (initiales Training):**
-- Precision: 0.384 | Recall: 0.367 | ROC-AUC: 0.698
-- ROC-AUC 0.698 = solides Signal (0.5 = Zufall, 1.0 = perfekt)
+**Was das Modell tut (am Code geprüft, 21.09.):**
+- Ein gemeinsames Modell für alle drei Zeitrahmen: Trainingsdaten aus 1d, 4h und 1h
+  aller Ticker werden zusammengeführt, `interval_code` (0/1/2) ist eines der 38 Features.
+- Label: 1, wenn der **höchste Schlusskurs der nächsten 5 Kerzen** mindestens 3 % über
+  dem aktuellen Schlusskurs liegt (nicht: Kurs nach 5 Tagen). "5" zählt in Kerzen des
+  jeweiligen Zeitrahmens (4h: 20 Stunden, 1h: 5 Stunden), die Schwelle ist überall 3 %.
+  Der angezeigte Wert ist also die Einschätzung "Anstieg > 3 % in 5 Kerzen", unabhängig
+  von Trend oder Wellenlage - "Umkehr" ist nur der Name.
+- Features (38): Renditen 1/3/5/10/20, Volatilität 5/10/20, MACD (4), Stochastik (3),
+  RSI (3), Bollinger (2), Volumen (3), Abstand zu GD 20/50/200 + zwei GD-Kreuzungen,
+  Kerzenform (4), Abstand zu 252-Kerzen-Hoch/-Tief, ROC 10/20, Anteil Kerzen über
+  GD 20/50, Zeitrahmen. Der im Docstring von `engineer.py` erwähnte Elliott-Score wird
+  NICHT verwendet. Alle Zeitfenster zählen in Kerzen (bei 4h/1h nicht in Tagen).
+- Zeitreihen-Split 80/20 (siehe Einschränkungen unten), XGBoost mit
+  `scale_pos_weight = negativ/positiv`, 400 Bäume mit Early Stopping.
 
-**Konfiguration (Stellschrauben):**
-```
-forecast_horizon       = 5     # Tage in die Zukunft
-reversal_threshold_pct = 3.0   # Mindest-Kursänderung % für "Umkehr"
-```
-Nach Änderung: `curl -X POST http://localhost:8015/model/train`
+**Split, Early Stopping und Kalibrierung (überarbeitet 21.09., behebt die
+zuvor dokumentierten Einschränkungen):**
+1. **Chronologischer Split PRO Ticker und Zeitrahmen** (vorher: ein einziger
+   80/20-Schnitt über die aneinandergehängte Verarbeitungsreihenfolge aller
+   Ticker/Intervalle - die Testmenge bestand dadurch je nach Dict-Reihenfolge
+   nur aus einem einzelnen Zeitrahmen, im Sandbox-Test ausschließlich 1h).
+   Jetzt: jeder Ticker/Zeitrahmen wird für sich 70/10/20 in train/val/test
+   geteilt (älterer Teil zuerst, kein Shufflen), erst danach werden alle
+   train-, val- bzw. test-Teile zusammengeführt. So enthält jede der drei
+   Mengen anteilig jeden Ticker und jeden Zeitrahmen.
+2. **Early Stopping auf der Validierungsmenge**, nicht mehr auf der Testmenge
+   - die berichteten Testmetriken sind dadurch nicht mehr durch die
+   Modellgröße selbst beeinflusst.
+3. **Isotonische Kalibrierung auf der Validierungsmenge**
+   (`sklearn.isotonic.IsotonicRegression`): bildet den rohen, durch
+   `scale_pos_weight` verzerrten Modellwert monoton auf die tatsächlich
+   beobachtete Trefferquote ab. Sandbox-Test mit rein zufälligen (nicht
+   vorhersagbaren) Kursdaten: der kalibrierte Modellwert pendelte sich nahe
+   der tatsächlichen Grundrate ein (≈27 %), statt wie vorher systematisch
+   angehoben zu sein (≈54 %) - das Modell "weiß", dass es nichts weiß, und
+   der Wert zeigt das jetzt auch an. `/model/info` → `calibrated: true/false`
+   zeigt an, ob ein Modell diese Kalibrierung hat; ältere, vor dem 21.09.
+   trainierte Modelle liefern weiterhin unkalibrierte Werte, bis neu trainiert
+   wird (Kalibrator-Datei `calibrator.joblib` fehlt dann einfach, Fallback ist
+   die Identität - kein Fehler).
+4. **Erklärung (`explanation`) rechnet jetzt mit denselben kalibrierten
+   Werten**: Basiswert und Modellwert werden je einzeln kalibriert, die
+   Verschiebung der einzelnen Merkmale wird proportional zur kalibrierten
+   Gesamtverschiebung verteilt - "Basiswert + Beiträge = angezeigter
+   Modellwert" gilt dadurch weiterhin exakt (im Sandbox-Test geprüft,
+   Abweichung nur Rundung, ≤0,1 Pp).
+5. **Noch nicht umgesetzt (bewusst zurückgestellt):** getrennte Modelle pro
+   Zeitrahmen statt eines gemeinsamen Modells mit `interval_code` als Feature.
+   Ob sich das lohnt, zeigt sich erst mit echten (nicht synthetischen)
+   Trainingsdaten über `breakdown`/`calibration` in `/model/info` - bei
+   deutlich unterschiedlicher Kalibrierungsgüte je Zeitrahmen wäre das der
+   nächste Schritt.
 
-**Signal-Schwellen:**
-- 0–39%: kein Signal
-- 40–54%: schwach
-- 55–74%: mittel
-- 75–100%: stark 🔥
+Nach dem Deployment dieser Änderung ist ein `POST /model/train` nötig, damit
+das gespeicherte Modell die Kalibrierungsdatei bekommt - vorher meldet
+`/model/info` `calibrated: false` und der Client zeigt einen entsprechenden
+Hinweis.
 
-**Endpunkte:**
+**Rohstoff-/Devisenpaare (`XAU/USD` u.ä.) über TwelveData (23.09.):** Zwei
+gegensätzliche Zwänge - Twelve Data verlangt für Rohstoffe/Devisen zwingend
+einen Schrägstrich im Symbol (`XAU/USD`, ein Symbol ohne Schrägstrich wie
+`XAUUSD` kennt die API nicht), unsere eigene stock-data-db-access-API lehnt
+einen Schrägstrich im URL-Pfad dagegen ab (Tomcat, siehe unten). **Lösung:**
+Solche Ticker werden intern mit Bindestrich geführt - **in der Ticker-Liste
+also `XAU-USD` eintragen, Quelle TwelveData** - und `twelvedata-service`
+übersetzt beim Abruf über `SYMBOL_ALIASES` in main.py auf das
+Twelve-Data-Symbol mit Schrägstrich. Der Ticker in der Antwort (und damit in
+der DB) bleibt die Bindestrich-Schreibweise. Hinterlegt: Gold (`XAU-USD`),
+Silber (`XAG-USD`), Platin (`XPT-USD`), Palladium (`XPD-USD`) - bei weiteren
+Paaren die Map in `SYMBOL_ALIASES` ergänzen. Bewusst keine generische
+Bindestrich→Schrägstrich-Umwandlung, weil das Ticker mit echtem Bindestrich
+(z.B. Aktien-Gattungen wie `BRK-B`) verfälschen würde.
 
-| Method | Path                   | Beschreibung                         |
-| ------ | ---------------------- | ------------------------------------ |
-| GET    | `/health`              | Status + model_ready                 |
-| GET    | `/model/status`        | Metriken + Feature-Importance        |
-| POST   | `/model/train`         | Training manuell starten             |
-| POST   | `/predict/{ticker}`    | Vorhersage für einen Ticker          |
-| POST   | `/predict/batch`       | Vorhersage für mehrere Ticker        |
+**Bug gefunden beim ersten Live-Training nach der Umstellung (22.09.): Index-
+Ticker scheiterten mit HTTP 400.** Sobald das Training wirklich alle Ticker mit
+Daten zieht (siehe oben), sind auch die INDIZES-Ticker (`^DJI`, `^GDAXI`,
+`^GSPC`, `^NDX`) dabei. `db_client.py` (ml-service UND history-fetcher) baute
+die GET-URLs bisher per f-String mit dem rohen Ticker im Pfad
+(`f"{BASE}/api/ohlcv/daily/{ticker}"`) - Tomcat lehnt ein `^` im Pfad schon auf
+Verbindungsebene ab (bevor Spring überhaupt routet), daher der 400 ohne
+aussagekräftigen Body. **Fix:** `urllib.parse.quote(ticker, safe="")` an jeder
+Stelle, an der ein Ticker in einen URL-Pfad eingesetzt wird - betrifft alle
+GET-`/latest`- und GET-ohne-Zeitraum-Aufrufe in beiden Services.
+agent-service-java war nicht betroffen: `WebClient.uri(template, ticker)` mit
+Template-Variable kodiert automatisch. Die im Trainings-Log sichtbaren
+"Zu wenig Samples"-Meldungen für andere Ticker (z.B. `QBTS`, `G24.DE`,
+`OM3L.DE`) sind dagegen kein Bug, sondern bedeuten schlicht: dieser Ticker hat
+noch nicht genug Kurshistorie in der DB - je nach Ticker per `/fetch/initial`
+oder weiteren Live-Analysen behebbar.
+
+**Erklärung je Vorhersage (`explanation`, seit 21.09.):** XGBoost `pred_contribs`
+(nur Bäume bis `best_iteration`, sonst passt die Summe nicht zu `predict_proba`)
+liefert je Merkmal einen Beitrag; er wird proportional in Prozentpunkte umgerechnet,
+sodass `base_pct + Σ effect_pp + other_pp = prob_pct` gilt (getestet, Abweichung nur
+Rundung). Die 8 stärksten Merkmale stehen einzeln (`factors`: technischer Name,
+deutsches Label aus `features/labels.py`, Rohwert, formatierter Wert, Einfluss), der
+Rest als `other_pp`. Dazu Einordnung `typical_score_pct` (Ø Modellwert im Training für
+diesen Zeitrahmen) und `actual_rate_pct` (tatsächlicher Anstiegsanteil) - beides erst
+bei Modellen, die nach dem 21.09. trainiert wurden. Neue Diagnosefelder in
+`model_meta.json`: `scale_pos_weight`, `breakdown` (je Zeitrahmen Samples, Anstiegsanteil,
+Ø Modellwert, Testmetriken), `calibration` (10 Bins Modellwert vs. Trefferquote),
+`feature_importance_all`.
 
 **Modell-Persistenz:** Docker-Volume `ml_models:/app/models` – überlebt Container-Neustarts.
 **Retraining:** Automatisch jeden Sonntag 02:00 Uhr.
@@ -961,16 +1310,27 @@ docker logs -f stock_history_fetcher
 - [ ] **Praxistest der Elliott-Wellen-Erkennung läuft (Rolf, ab 19.08.)** -
       prüft anhand des neuen Charts, ob die von ta4j gefundenen Wellen
       plausibel sind
-- [ ] **Idee, noch nicht begonnen: Candle-Pattern-Erkennung eventuell auf ta4j
-      umstellen** (Rolf, 19.08.) - siehe Recherche-Ergebnis + Empfehlung in
-      3.2c (erst Elliott-Praxistest abschließen)
+- [x] Bullische UND bearische Candle-Pattern-Erkennung auf ta4j umgestellt
+      (23./24.08., außer jeweils Abandoned Baby) - Geometrie aus ta4js
+      RealBodyIndicator/Bar/Num nachgebaut (KEINE Rule-Injection, siehe
+      Korrektur in 3.2c), GD200→GD50→GD20-Kaskade als Trend-Regel
+      (`CandleGdCascade.java`), plus Chart-Visualisierung im Frontend
+      ("Muster-Chart"-Spalte). Von Rolf lokal als `mvn compile`-fähig
+      bestätigt (24.08., nach einem Fix: `ElliottAnalysisUtil` musste
+      `public` sein, nicht nur `toBarSeries()`)
+- [ ] GD-Kalibrierung (Periodenlänge, evtl. Steigungskriterium statt reinem
+      Preisvergleich) an echten Marktdaten noch nicht validiert - Rolfs
+      eigene Einschätzung: "Die Praxis wird zeigen ob es tatsächlich
+      funktioniert" (24.08.)
+- [ ] PDF-Chart-Grafik für Candle-Patterns fehlt (nur Text "(GD200)" im
+      Badge, kein SVG wie beim Elliott-Chart)
 - [ ] Thumbnail-Chart-Performance bei sehr langen Ticker-Listen (DAX/Dow) noch
       nicht geprüft
 - [ ] Klären: Python-`agent-service` (Port 8010) noch aktiv oder durch
       `agent-service-java` ersetzt?
 - [ ] `stock-data-db-access`: README/Doku für Java-25-Stand ergänzen
 
-**Zuletzt geändert:** 2026-08-23
+**Zuletzt geändert:** 2026-08-24
 **Zuletzt bearbeitet von Claude:** Aufbauend auf dem 19./20.08.-Stand (siehe
 Roadmap oben für Details zu Option C, Currency-/Name-Rollout) folgten drei
 weitere Sessions rund um die lokale Build-Verifikation. Rolf hat `mvn compile`
@@ -983,14 +1343,38 @@ wieder auf 1.00 MB zurück. Danach schlug `docker compose up --build` mit
 `npm ci`/`EUSAGE` fehl, da `package-lock.json` seit dem Hinzufügen von
 `lightweight-charts` strukturell nicht mehr synchron zu `package.json`
 gehalten werden kann (Claudes Sandbox hat keinen Netzwerkzugriff für
-`npm install`) - Dockerfile daher auf `npm install` umgestellt. Schließlich
-fiel auf, dass der Client-Default `lookbackDays=90` nicht mehr zum
+`npm install`) - Dockerfile daher auf `npm install` umgestellt. Danach fiel
+auf, dass der Client-Default `lookbackDays=90` nicht mehr zum
 Backend-`ELLIOTT_LOOKBACK_BY_INTERVAL["1d"]=230` passte; bei der Analyse
 stellte sich heraus, dass dieser Client-Wert die Elliott-Wave-Erkennung
 ohnehin nie beeinflusst hat (nur die Trend%-Spalte) - Default trotzdem auf
 230 synchronisiert und das Feld zur Vermeidung von Verwirrung
-schreibgeschützt gemacht. **Alle offenen Build-relevanten Punkte sind damit
-erledigt; das Projekt ist aus Sicht dieser Doku push-bereit.**
+schreibgeschützt gemacht.
+
+Ab 23.08. dann die Candle-Pattern-Umstellung: Rolf griff die zuvor
+zurückgestellte Idee wieder auf. Claude baute zunächst die Kerzen-Geometrie
+von Hand mit ta4js Rule-losen 0.22.7-Bausteinen nach (RealBodyIndicator +
+eigener Gd20DownTrendIndicator) - Rolf verwies auf ein Rule-Injection-Beispiel
+(`new HammerIndicator(series, downTrendRule)`), woraufhin Claude komplett
+darauf umbaute, ohne es verifizieren zu können (kein 0.24.1-Quellcode
+verfügbar). **Rolf lud daraufhin die echte `ta4j-core-0.24.1.jar` hoch** -
+die Prüfung (eigener Konstantenpool-Parser gebaut, da `javap` im
+Sandbox-Container fehlte) widerlegte die Rule-Injection-Annahme eindeutig:
+alle betroffenen ta4j-Klassen binden ihre Trendprüfung weiterhin fest an
+ADX/UpTrend, byte-identisch zu 0.22.7. Claude baute daraufhin auf den
+ursprünglichen, jetzt gegen den echten Bytecode verifizierten Ansatz zurück.
+Danach zwei direkte Iterationen auf Rolfs Anfrage: (1) die feste GD20-Prüfung
+durch eine GD200→GD50→GD20-Kaskade ersetzt, inkl. neuer Chart-Visualisierung
+im Client ("Muster-Chart"-Spalte, z.B. "Hammer unterhalb GD200"); (2) dieselbe
+Umstellung für `BearishCandlePatterns` übertragen (Shooting Star, Bearish
+Engulfing, Dark Cloud Cover), inkl. eines dabei entdeckten und noch in
+derselben Session behobenen Richtungs-Bugs (Modal/Tooltip zeigten fest
+"unterhalb GD", was für bearische Muster falsch ist - jetzt musterabhängig
+"unterhalb"/"oberhalb"). Ein erster Docker-Build schlug fehl
+(`ElliottAnalysisUtil is not public` - nur die genutzte Methode, nicht die
+Klasse selbst war public gemacht worden), von Rolf gemeldet und sofort
+behoben. **`docker compose up -d --build agent-service-java` läuft seitdem
+bei Rolf durch.** GD-Kalibrierung an echten Marktdaten steht noch aus.
 
 
 ---

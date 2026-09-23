@@ -12,6 +12,8 @@ services:
   twelvedata-url: ${TWELVEDATA_SERVICE_URL:http://twelvedata-service:8012}
   ml-url: ${ML_SERVICE_URL:http://ml-service:8015}
   db-url: ${DB_SERVICE_URL:http://db-service:8013}
+  # Steuerungs-Server von Gluetun (VPN-Container, nur im Docker-Netz erreichbar)
+  vpn-control-url: ${VPN_CONTROL_URL:http://vpn:8000}
 
 # Analyse-Konfiguration
 analysis:

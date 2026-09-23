@@ -38,7 +38,7 @@ import rf.stock.agent.model.OhlcvBar;
  * benötigen - unabhängig davon, ob nach einem Impuls- oder Korrekturmuster
  * gesucht wird.
  */
-final class ElliottAnalysisUtil {
+public final class ElliottAnalysisUtil {
 
     private ElliottAnalysisUtil() {
     }
@@ -268,7 +268,8 @@ final class ElliottAnalysisUtil {
         return new ElliottTarget(price, retracementPct);
     }
 
-    static BarSeries toBarSeries(List<OhlcvBar> bars) {
+    /** public, damit candle.Ta4jBullishCandlePatterns dieselbe BarSeries-Konstruktion nutzt statt sie zu duplizieren. */
+    public static BarSeries toBarSeries(List<OhlcvBar> bars) {
         BarSeries series = new BaseBarSeriesBuilder().withName("agent-service-analysis").build();
         Instant previousEndTime = null;
         for (OhlcvBar bar : bars) {

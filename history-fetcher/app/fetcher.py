@@ -22,6 +22,7 @@ from app.db_client import (
     bulk_insert_daily,
     bulk_insert_hourly,
     bulk_insert_4h,
+    get_all_list_codes,
     get_latest_daily_date,
     get_latest_hourly_time,
     get_latest_4h_time,
@@ -32,18 +33,21 @@ from app.db_client import (
 
 logger = logging.getLogger(__name__)
 
-LIST_CODES = ["DAX40", "DOW30", "INDIZES", "INTERNATIONALE RTF'S"]
-
-
 async def _get_all_tickers() -> list[dict]:
     """
-    Holt alle Ticker aus allen konfigurierten Listen.
-    Unbekannte Listen-Codes werden gewarnt aber nicht abgebrochen.
+    Holt alle Ticker aus ALLEN in der DB angelegten Listen (21.09., vorher eine
+    fest codierte Liste "DAX40, DOW30, INDIZES, INTERNATIONALE RTF'S" - dadurch
+    bekam jede neu erstellte Liste erst nach einer Codeänderung hier History-
+    Daten). Unbekannte/inzwischen gelöschte Listen-Codes werden gewarnt aber
+    nicht abgebrochen (Race mit gleichzeitigem Löschen einer Liste).
     """
+    list_codes = await get_all_list_codes()
+    logger.info(f"{len(list_codes)} Ticker-Listen gefunden: {', '.join(list_codes)}")
+
     all_tickers = []
     seen        = set()
 
-    for code in LIST_CODES:
+    for code in list_codes:
         data = await get_ticker_list(code)
         if not data:
             logger.warning(f"Liste '{code}' nicht gefunden – übersprungen")
@@ -72,7 +76,7 @@ async def _get_all_tickers() -> list[dict]:
             })
 
     logger.info(f"Gesamt {len(all_tickers)} eindeutige Ticker aus "
-                f"{len(LIST_CODES)} Listen")
+                f"{len(list_codes)} Listen")
     return all_tickers
 
 

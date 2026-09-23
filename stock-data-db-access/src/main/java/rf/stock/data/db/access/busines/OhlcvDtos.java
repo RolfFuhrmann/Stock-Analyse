@@ -14,6 +14,16 @@ import java.util.List;
  */
 public final class OhlcvDtos {
 
+    // ── Ticker-Universum (21.09., für ML-Training) ─────────────────────────────
+
+    /** Ticker mit tatsächlichen OHLCV-Zeilen je Tabelle - unabhängig von ticker_meta/Listenzugehörigkeit. */
+    public record TickerCoverage(
+        String ticker,
+        int    dailyRows,
+        int    hourlyRows,
+        int    fourHourlyRows
+    ) {}
+
     private OhlcvDtos() {}
 
     // ── TickerMeta ────────────────────────────────────────────────────────────

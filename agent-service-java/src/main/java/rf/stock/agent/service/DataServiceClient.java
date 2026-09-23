@@ -11,6 +11,7 @@ import org.springframework.web.reactive.function.client.WebClient;
 import reactor.core.publisher.Flux;
 import rf.stock.agent.model.TickerQuote;
 
+import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 
@@ -39,7 +40,8 @@ public class DataServiceClient {
     }
 
     /**
-     * Abonniert den SSE-Stream eines Daten-Service (Yahoo oder TwelveData).
+     * Abonniert den SSE-Stream eines Daten-Service (Yahoo oder TwelveData) mit
+     * dem Standard-Intervall des jeweiligen Service (Tageskerzen).
      *
      * @param serviceUrl Basis-URL des Daten-Service
      * @param tickers    Ticker-Liste
@@ -47,10 +49,24 @@ public class DataServiceClient {
      * @return Flux mit einem TickerQuote-Element pro "quote"-Event; endet bei "done"
      */
     public Flux<TickerQuote> streamQuotes(String serviceUrl, List<String> tickers, int outputsize) {
-        Map<String, Object> body = Map.of(
-            "tickers", tickers,
-            "outputsize", outputsize
-        );
+        return streamQuotes(serviceUrl, tickers, outputsize, null);
+    }
+
+    /**
+     * Wie {@link #streamQuotes(String, List, int)}, aber mit explizitem Intervall.
+     *
+     * @param interval Intervall in der Schreibweise des jeweiligen Service:
+     *                 Yahoo "1d"/"1h", TwelveData "1day"/"1h"/"4h".
+     *                 null = Standard des Service (Tageskerzen), das Feld wird dann
+     *                 gar nicht erst mitgeschickt.
+     */
+    public Flux<TickerQuote> streamQuotes(String serviceUrl, List<String> tickers, int outputsize, String interval) {
+        Map<String, Object> body = new HashMap<>();
+        body.put("tickers", tickers);
+        body.put("outputsize", outputsize);
+        if (interval != null) {
+            body.put("interval", interval);
+        }
 
         return webClient.post()
             .uri(serviceUrl + "/quotes/stream")

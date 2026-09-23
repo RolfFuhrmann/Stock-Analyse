@@ -2,6 +2,16 @@ package rf.stock.agent.candle;
 
 import java.util.List;
 
+import org.ta4j.core.Bar;
+import org.ta4j.core.BarSeries;
+import org.ta4j.core.indicators.averages.SMAIndicator;
+import org.ta4j.core.indicators.candles.RealBodyIndicator;
+import org.ta4j.core.indicators.helpers.ClosePriceIndicator;
+import org.ta4j.core.num.Num;
+
+import rf.stock.agent.candle.BullishEngulfing.BullishEngulfingPattern;
+import rf.stock.agent.candle.Hammer.HammerPattern;
+import rf.stock.agent.indicator.ElliottAnalysisUtil;
 import rf.stock.agent.model.CandlePatternResult;
 import rf.stock.agent.model.OhlcvBar;
 
@@ -12,9 +22,44 @@ import rf.stock.agent.model.OhlcvBar;
  * Bullish Engulfing
  * Piercing Line
  * Hammer
+ *
+ * Seit 23.08. auf ta4j umgestellt, AUSSER Abandoned Baby - dafür gibt es
+ * keinen ta4j-Indikator, bleibt daher unverändert bei der Eigenentwicklung
+ * (CandleUtils, negative Indizierung).
+ *
+ * WICHTIG (korrigiert 23.08., nach Prüfung des echten ta4j-0.24.1-JARs):
+ * ta4js Hammer-/MorningStar-/Piercing-Indikatoren binden ihre Trendprüfung
+ * WEITERHIN fest an einen internen, nicht austauschbaren ADX-basierten
+ * DownTrendIndicator (byte-identisch zu 0.22.7 - eine zunächst angenommene
+ * Rule-Injection-Erweiterung existiert in 0.24.1 NICHT, per javap/strings-
+ * Analyse des JARs verifiziert). Deshalb: Geometrie mit ta4js eigenen,
+ * wiederverwendbaren Bausteinen (RealBodyIndicator, Bar/Num) nachgebaut -
+ * identische Formeln und Default-Schwellwerte wie in ta4js Originalklassen -
+ * aber OHNE deren eingebaute Trendprüfung, kombiniert mit einer eigenen
+ * GD-Kaskade statt ADX.
+ *
+ * GD-Kaskade (24.08., Rolfs Wunsch): jedes der verbliebenen ta4j-basierten
+ * Muster (Morning Star, Piercing Line) wird zuerst mit GD200 auf Downtrend
+ * geprüft, dann GD50, dann GD20 - der erste GD, unter dem der Schlusskurs
+ * liegt, gilt als Bestätigung (gdPeriod im Ergebnis).
+ *
+ * Piercing: ta4j hat zwei Implementierungen (PiercingIndicator vs.
+ * PiercingLineIndicator) - hier an PiercingLineIndicator angelehnt (neuer,
+ * @since 0.22.3, mit explizit konfigurierbaren Gap-/Penetrations-Schwellen
+ * statt fest verdrahtet).
+ *
+ * Hammer (06.09.) und Bullish Engulfing (07.09.) sind komplett eigenständig
+ * gekapselt (candle/Hammer/HammerPattern bzw.
+ * candle/BullishEngulfing/BullishEngulfingPattern) - beide mit eigener
+ * Trendprüfung statt GD-Kaskade (Hammer: ADX/ta4js DownTrendIndicator,
+ * Bullish Engulfing: neues Periodentief/EngulfingNewLowRule), eigenen
+ * Bestätigungsfällen (Hammer: Close > Hammer-Close; Bullish Engulfing:
+ * Close ODER High der 3. Kerze über der Engulfing-Kerze) und
+ * candleDates/confirmed im CandlePatternResult statt gdPeriod.
  */
 
 public class BullishCandlePatterns {
+
     private BullishCandlePatterns() {
         /* This utility class should not be instantiated */
     }
@@ -24,24 +69,53 @@ public class BullishCandlePatterns {
             return CandlePatternResult.none();
         }
 
+        // Abandoned Baby bleibt Eigenentwicklung (kein ta4j-Äquivalent vorhanden, kein GD).
         CandleUtils candleSticksUtil = new CandleUtils(candleSticksToValidate);
-
         if (detectAbandonedBaby(candleSticksUtil))
-            return new CandlePatternResult("Bullish Abandoned Baby", 5);
-        if (detectMorningStar(candleSticksUtil))
-            return new CandlePatternResult("Morning Star", 4);
-        if (detectEngulfing(candleSticksUtil))
-            return new CandlePatternResult("Bullish Engulfing", 3);
-        if (detectPiercing(candleSticksUtil))
-            return new CandlePatternResult("Piercing Line", 2);
-        if (detectHammer(candleSticksUtil))
-            return new CandlePatternResult("Hammer", 1);
+            return new CandlePatternResult("Bullish Abandoned Baby", 5, null, null, false);
+
+        BarSeries series = ElliottAnalysisUtil.toBarSeries(candleSticksToValidate);
+        int index = series.getEndIndex();
+        ClosePriceIndicator closePrice = new ClosePriceIndicator(series);
+        SMAIndicator[] gdIndicators = CandleGdCascade.buildGdIndicators(closePrice);
+
+        if (morningStarGeometry(series, index)) {
+            CandlePatternResult result = CandleGdCascade.withGdCascade(closePrice, gdIndicators, index,
+                    "Morning Star", 4, true);
+            if (result != null)
+                return result;
+        }
+        // Bullish Engulfing: komplett gekapselt in candle/BullishEngulfing/
+        // BullishEngulfingPattern (07.09.), analog zu Hammer. Trend hier über
+        // EngulfingNewLowRule (neues Periodentief) statt GD-Kaskade.
+        BullishEngulfingPattern.EngulfingMatch engulfingMatch = new BullishEngulfingPattern(series)
+                .isBullishEngulfing(index);
+        if (engulfingMatch.matched()) {
+            boolean confirmed = engulfingMatch.engulfingCase() == BullishEngulfingPattern.EngulfingCase.ENGULFING_CONFIRMED;
+            return new CandlePatternResult("Bullish Engulfing", 3, null, engulfingMatch.candleDates(), confirmed);
+        }
+        if (piercingLineGeometry(series, index)) {
+            CandlePatternResult result = CandleGdCascade.withGdCascade(closePrice, gdIndicators, index,
+                    "Piercing Line", 2, true);
+            if (result != null)
+                return result;
+        }
+
+        // Hammer: komplett gekapselt in candle/Hammer/HammerPattern (06.09.).
+        // Trend hier ADX statt GD-Kaskade - siehe HammerPattern-Klassenkommentar.
+        // "confirmed" (07.09.) ersetzt den vorherigen Namens-Suffix "(bestätigt)" -
+        // der Pattern-Name bleibt jetzt für beide Fälle einheitlich "Hammer".
+        HammerPattern.HammerMatch hammerMatch = new HammerPattern(series).isHammer(index);
+        if (hammerMatch.matched()) {
+            boolean confirmed = hammerMatch.hammerCase() == HammerPattern.HammerCase.HAMMER_CONFIRMED;
+            return new CandlePatternResult("Hammer", 1, null, hammerMatch.candleDates(), confirmed);
+        }
 
         return CandlePatternResult.none();
     }
 
     /**
-     * Regel:
+     * Regel (unverändert, Eigenentwicklung - siehe Klassenkommentar):
      * Auf eine große rote Kerze folgt ein Doji komplett isoliert durch ein Gap
      * (Abstand) nach unten.
      * Die dritte, große grüne Kerze springt per Gap wieder nach oben.
@@ -60,98 +134,78 @@ public class BullishCandlePatterns {
     }
 
     /**
-     * Regel:
-     * Lange rote Kerze, gefolgt von einer kurzen, tiefer liegenden Kerze (Farbe
-     * egal, oft als "Stern" bezeichnet) und einer anschließenden langen grünen
-     * Kerze.
-     * Die lange rote Kerze ist bewusst Teil des geforderten Downtrends (daher
-     * patternStartIndex -2 statt -3 und Mindestlänge 7 statt 8).
+     * Geometrie 1:1 nachgebaut aus ta4js MorningStarIndicator (Default-
+     * Schwellwerte: smallBodyThresholdPercentage=0.015,
+     * bigBodyThresholdPercentage=0.03) - OHNE die dort fest eingebaute
+     * ADX-Trendprüfung (siehe Klassenkommentar).
      */
-    private static boolean detectMorningStar(CandleUtils candleSticksUtil) {
-
-        if (candleSticksUtil.length < 7 || !candleSticksUtil.hasDowntrendBefore(-2, 5)) {
+    private static boolean morningStarGeometry(BarSeries series, int index) {
+        if (index < 2) {
             return false;
         }
+        RealBodyIndicator body = new RealBodyIndicator(series);
 
-        return candleSticksUtil.isBearish(-3)
-                && candleSticksUtil.body(-2) < candleSticksUtil.body(-3)
-                && candleSticksUtil.high(-2) < candleSticksUtil.high(-3)
-                && candleSticksUtil.low(-2) < candleSticksUtil.low(-3)
-                && candleSticksUtil.isBullish(-1)
-                && candleSticksUtil.close(-1) > candleSticksUtil.midpoint(-3)
-                && candleSticksUtil.body(-1) > candleSticksUtil.body(-2);
+        Bar firstBar = series.getBar(index - 2);
+        Bar secondBar = series.getBar(index - 1);
+        Bar thirdBar = series.getBar(index);
+
+        Num smallBodyThreshold = series.numFactory().numOf(0.015);
+        Num bigBodyThreshold = series.numFactory().numOf(0.03);
+
+        Num firstBarPercentage = body.getValue(index - 2).abs().dividedBy(firstBar.getOpenPrice());
+        Num secondBarPercentage = body.getValue(index - 1).abs().dividedBy(secondBar.getOpenPrice());
+        Num thirdBarPercentage = body.getValue(index).abs().dividedBy(thirdBar.getOpenPrice());
+        Num firstBarMiddlePoint = firstBar.getOpenPrice()
+                .minus(firstBar.getClosePrice())
+                .dividedBy(series.numFactory().numOf(2))
+                .plus(firstBar.getClosePrice());
+
+        return firstBar.isBearish() && firstBarPercentage.isGreaterThanOrEqual(bigBodyThreshold)
+                && secondBar.getOpenPrice().isLessThan(firstBar.getClosePrice())
+                && secondBarPercentage.isLessThanOrEqual(smallBodyThreshold)
+                && thirdBar.getClosePrice().isGreaterThan(firstBarMiddlePoint) && thirdBar.isBullish()
+                && thirdBarPercentage.isGreaterThanOrEqual(bigBodyThreshold);
     }
 
     /**
-     * Regel:
-     * Eine kleine rote Kerze wird am nächsten Zeitraum vollständig vom großen
-     * Körper einer grünen Kerze umschlossen.
-     * Analog zum Morning Star ist die kleine rote Kerze bewusst Teil des
-     * geforderten Downtrends (daher patternStartIndex -1 statt -2 und
-     * Mindestlänge 6 statt 7).
+     * Geometrie 1:1 nachgebaut aus ta4js PiercingLineIndicator (Default-
+     * Schwellwerte: bigBodyThresholdPercentage=0.03, gapThresholdPercentage=0.0,
+     * penetrationThresholdPercentage=0.5) - OHNE die dort fest eingebaute
+     * Trendprüfung (siehe Klassenkommentar).
      */
-    private static boolean detectEngulfing(CandleUtils candleSticksUtil) {
+    private static boolean piercingLineGeometry(BarSeries series, int index) {
+        if (index < 1) {
+            return false;
+        }
+        RealBodyIndicator body = new RealBodyIndicator(series);
 
-        if (candleSticksUtil.length < 6 || !candleSticksUtil.hasDowntrendBefore(-1, 5)) {
+        Bar firstBar = series.getBar(index - 1);
+        Bar secondBar = series.getBar(index);
+        Num firstOpenPrice = firstBar.getOpenPrice();
+        Num secondOpenPrice = secondBar.getOpenPrice();
+        Num firstClosePrice = firstBar.getClosePrice();
+
+        if (isInvalidDenominator(firstOpenPrice) || isInvalidDenominator(secondOpenPrice)
+                || isInvalidDenominator(firstClosePrice)) {
             return false;
         }
 
-        // Exklusivität:
-        // Ein Morning Star hat Vorrang vor einem Bullish Engulfing.
-        if (candleSticksUtil.length >= 8 && candleSticksUtil.hasDowntrendBefore(-3, 4)) {
+        Num bigBodyThreshold = series.numFactory().numOf(0.03);
+        Num penetrationThreshold = series.numFactory().numOf(0.5);
 
-            boolean isMorningStarSetup = candleSticksUtil.isBearish(-3)
-                    && candleSticksUtil.body(-2) < candleSticksUtil.body(-3)
-                    && candleSticksUtil.isBullish(-1)
-                    && candleSticksUtil.close(-1) > candleSticksUtil.midpoint(-3);
+        Num firstBodyRatio = body.getValue(index - 1).abs().dividedBy(firstOpenPrice);
+        Num secondBodyRatio = body.getValue(index).abs().dividedBy(secondOpenPrice);
+        Num firstBodySize = firstOpenPrice.minus(firstClosePrice);
+        Num requiredClose = firstClosePrice.plus(firstBodySize.multipliedBy(penetrationThreshold));
 
-            if (isMorningStarSetup) {
-                return false;
-            }
-        }
-
-        return candleSticksUtil.isBearish(-2)
-                && candleSticksUtil.isBullish(-1)
-                && candleSticksUtil.open(-1) <= candleSticksUtil.close(-2)
-                && candleSticksUtil.close(-1) >= candleSticksUtil.open(-2)
-                && candleSticksUtil.body(-1) > candleSticksUtil.body(-2);
+        return firstBar.isBearish() && firstBodyRatio.isGreaterThanOrEqual(bigBodyThreshold)
+                && secondBar.isBullish() && secondBodyRatio.isGreaterThanOrEqual(bigBodyThreshold)
+                && secondOpenPrice.isLessThan(firstClosePrice)
+                && secondBar.getClosePrice().isGreaterThan(requiredClose)
+                && secondBar.getClosePrice().isLessThan(firstOpenPrice);
     }
 
-    /**
-     * Regel:
-     * Eine große rote Kerze wird gefolgt von einer grünen Kerze, die unter dem Tief
-     * der roten Kerze eröffnet, dann aber weit nach oben zieht und über 50% des
-     * roten Körpers schließt.
-     */
-    private static boolean detectPiercing(CandleUtils candleSticksUtil) {
-        if (candleSticksUtil.length < 7 || !candleSticksUtil.hasDowntrendBefore(-2, 5))
-            return false;
-
-        double targetLine = candleSticksUtil.midpoint(-2) - (candleSticksUtil.body(-2));
-
-        return candleSticksUtil.isBearish(-2)
-                && candleSticksUtil.isBullish(-1)
-                && candleSticksUtil.open(-1) < candleSticksUtil.low(-2)
-                && candleSticksUtil.close(-1) > targetLine
-                && candleSticksUtil.close(-1) <= candleSticksUtil.open(-2);
-    }
-
-    /**
-     * Regel:
-     * Kleiner Körper am oberen Ende der Spanne mit einem sehr langen unteren
-     * Schatten (mindestens doppelt so lang wie der Körper)
-     */
-    private static boolean detectHammer(CandleUtils candleSticksUtil) {
-        if (candleSticksUtil.length < 6 || !candleSticksUtil.hasDowntrendBefore(-1, 5))
-            return false;
-
-        double span = candleSticksUtil.high(-1) - candleSticksUtil.low(-1);
-        if (span == 0)
-            return false;
-
-        return candleSticksUtil.body(-1) / span < 0.35
-                && candleSticksUtil.body(-1) / span > 0.02
-                && candleSticksUtil.lowerShadow(-1) >= span * 0.55
-                && candleSticksUtil.upperShadow(-1) <= span * 0.15;
+    private static boolean isInvalidDenominator(Num value) {
+        return Num.isNaNOrNull(value) || Double.isNaN(value.doubleValue()) || value.isZero();
     }
 }

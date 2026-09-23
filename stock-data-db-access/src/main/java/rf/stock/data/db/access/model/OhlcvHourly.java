@@ -32,7 +32,13 @@ public class OhlcvHourly {
     @Column(nullable = false, length = 30)
     private String ticker;
 
-    /** Zeitpunkt der Kerze in UTC. */
+    /**
+     * Beginn der Stundenkerze in lokaler Börsenzeit ohne Zeitzone (NICHT UTC):
+     * Xetra-Werte in Berliner Zeit (z.B. 09:00-17:00), US-Werte in New Yorker
+     * Zeit (z.B. 09:30-15:30). So legen history-fetcher und agent-service-java
+     * die Werte ab, der Zeitstempel wird unverändert aus dem Yahoo-/TwelveData-
+     * Zeitstempel übernommen (Zone/Offset abgeschnitten).
+     */
     @Column(name = "trade_time", nullable = false)
     private LocalDateTime tradeTime;
 

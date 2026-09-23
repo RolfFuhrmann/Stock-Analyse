@@ -1,4 +1,7 @@
 /Users/rolf/Documents/Projekte/Entwicklung/Stock Analyse/agent-service-java/src/test/java/rf/stock/agent/candle/BearishCandlePatternsTest.java
 /Users/rolf/Documents/Projekte/Entwicklung/Stock Analyse/agent-service-java/src/test/java/rf/stock/agent/candle/BullishCandlePatternsTest.java
+/Users/rolf/Documents/Projekte/Entwicklung/Stock Analyse/agent-service-java/src/test/java/rf/stock/agent/candle/BullishEngulfing/BullishEngulfingPatternTest.java
+/Users/rolf/Documents/Projekte/Entwicklung/Stock Analyse/agent-service-java/src/test/java/rf/stock/agent/candle/Hammer/HammerPatternTest.java
 /Users/rolf/Documents/Projekte/Entwicklung/Stock Analyse/agent-service-java/src/test/java/rf/stock/agent/indicator/BearishIndicatorTest.java
 /Users/rolf/Documents/Projekte/Entwicklung/Stock Analyse/agent-service-java/src/test/java/rf/stock/agent/indicator/BullishIndicatorTest.java
+/Users/rolf/Documents/Projekte/Entwicklung/Stock Analyse/agent-service-java/src/test/java/rf/stock/agent/util/TradingDayUtilTest.java

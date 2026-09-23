@@ -34,7 +34,12 @@ public class OhlcvFourHourly {
     @Column(nullable = false, length = 30)
     private String ticker;
 
-    /** Kerzenbeginn in UTC. */
+    /**
+     * Kerzenbeginn in lokaler Börsenzeit ohne Zeitzone (NICHT UTC).
+     * Yahoo (aus 1h aggregiert): Blockstart 0/4/8/12/16/20 Uhr, z.B. Xetra
+     * 08:00, 12:00, 16:00. TwelveData (nativ): Blockgrenzen der Börse, z.B.
+     * NYSE 09:30 und 13:30 (New Yorker Zeit).
+     */
     @Column(name = "trade_time", nullable = false)
     private LocalDateTime tradeTime;
 

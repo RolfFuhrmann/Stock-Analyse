@@ -6,6 +6,7 @@ import logging
 from datetime import date, datetime
 from decimal import Decimal
 from typing import Any
+from urllib.parse import quote
 
 import httpx
 
@@ -124,7 +125,7 @@ async def get_latest_4h_time(ticker: str) -> datetime | None:
     """
     async with httpx.AsyncClient(timeout=TIMEOUT) as client:
         resp = await client.get(
-            f"{BASE}/api/ohlcv/4h/{ticker}/latest",
+            f"{BASE}/api/ohlcv/4h/{quote(ticker, safe='')}/latest",
             params={"n": 1},
         )
         if resp.status_code == 200:
@@ -143,7 +144,7 @@ async def get_latest_hourly_time(ticker: str) -> datetime | None:
     """
     async with httpx.AsyncClient(timeout=TIMEOUT) as client:
         resp = await client.get(
-            f"{BASE}/api/ohlcv/hourly/{ticker}/latest",
+            f"{BASE}/api/ohlcv/hourly/{quote(ticker, safe='')}/latest",
             params={"n": 1},
         )
         if resp.status_code == 200:
@@ -202,6 +203,18 @@ async def log_fetch(
 
 
 # ── Ticker-Listen ─────────────────────────────────────────────
+
+async def get_all_list_codes() -> list[str]:
+    """
+    Holt die Codes ALLER in der DB angelegten Ticker-Listen (21.09.) - ersetzt
+    die vorher fest codierte Liste in fetcher.py, damit auch neu erstellte
+    Listen ohne Codeänderung erfasst werden.
+    """
+    async with httpx.AsyncClient(timeout=TIMEOUT) as client:
+        resp = await client.get(f"{BASE}/api/lists")
+        resp.raise_for_status()
+        return [entry["code"] for entry in resp.json()]
+
 
 async def get_ticker_list(list_code: str) -> dict | None:
     """Holt eine Ticker-Liste mit raw_symbols aus dem DB-Service."""
