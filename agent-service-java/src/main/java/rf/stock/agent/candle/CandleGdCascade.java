@@ -60,7 +60,7 @@ final class CandleGdCascade {
             SMAIndicator sma = gdIndicators[i];
             boolean confirmed = downtrend ? close.isLessThan(sma.getValue(index)) : close.isGreaterThan(sma.getValue(index));
             if (confirmed) {
-                return new CandlePatternResult(pattern, strength, GD_PERIODS[i]);
+                return new CandlePatternResult(pattern, strength, GD_PERIODS[i], null, false);
             }
         }
         return null;

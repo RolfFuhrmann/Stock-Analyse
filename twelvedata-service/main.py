@@ -14,6 +14,7 @@ import asyncio
 import json
 import logging
 import os
+import re
 from typing import AsyncGenerator
 
 import httpx
@@ -24,6 +25,20 @@ from sse_starlette.sse import EventSourceResponse
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s")
 logger = logging.getLogger(__name__)
+
+# httpx loggt auf INFO jeden Request mit vollständiger URL - und damit den
+# API-Key ("...&apikey=..."). Ab WARNING erscheinen nur noch Probleme.
+logging.getLogger("httpx").setLevel(logging.WARNING)
+
+# Fehlermeldungen von httpx (z.B. HTTPStatusError bei 429) enthalten ebenfalls
+# die komplette URL inkl. API-Key. Sie werden geloggt UND als "error" im
+# SSE-Event bis zum Client durchgereicht - daher vorher schwärzen.
+_APIKEY_PATTERN = re.compile(r"(apikey=)[^&\s'\"]+", re.IGNORECASE)
+
+
+def _redact(text: str) -> str:
+    """Ersetzt den Wert von 'apikey=' durch '***'."""
+    return _APIKEY_PATTERN.sub(r"\1***", text)
 
 app = FastAPI(
     title="Stock Twelve Data Service",
@@ -46,6 +61,23 @@ FETCH_DELAY = 7.5
 
 # Erlaubte Intervalle – Schutz vor ungültigen Werten
 VALID_INTERVALS = {"1min", "5min", "15min", "30min", "1h", "2h", "4h", "1day", "1week", "1month"}
+
+# Twelve Data verlangt bei Rohstoffen und Devisenpaaren zwingend einen
+# Schrägstrich im Symbol (z.B. "XAU/USD" - "XAUUSD" kennt die API nicht).
+# Unsere eigene DB-Service-API lehnt einen Schrägstrich im URL-Pfad dagegen ab
+# (Tomcat: "encoded slash", HTTP 400 - betrifft agent-service-java,
+# history-fetcher UND ml-service, die den Ticker alle in Pfade einsetzen).
+# Deshalb wird so ein Ticker intern mit Bindestrich geführt (z.B. "XAU-USD" -
+# das ist der Wert, den man in der Ticker-Liste einträgt) und hier für den
+# Twelve-Data-Abruf auf das Schrägstrich-Symbol übersetzt. Der Ticker in der
+# Antwort bleibt die interne Schreibweise, damit DB und Client konsistent
+# bleiben. Bei weiteren Rohstoff-/Devisenpaaren hier ergänzen.
+SYMBOL_ALIASES = {
+    "XAU-USD": "XAU/USD",  # Gold
+    "XAG-USD": "XAG/USD",  # Silber
+    "XPT-USD": "XPT/USD",  # Platin
+    "XPD-USD": "XPD/USD",  # Palladium
+}
 
 
 # ── Models ───────────────────────────────────────────────────
@@ -90,8 +122,12 @@ async def fetch_ticker(
         logger.warning(f"{ticker}: Ungültiges interval '{interval}' – Fallback auf 1day")
         interval = "1day"
 
+    # Für Twelve Data übersetzen (siehe SYMBOL_ALIASES), intern bleibt der
+    # Ticker mit Bindestrich - auch in der zurückgegebenen TickerQuote.
+    td_symbol = SYMBOL_ALIASES.get(ticker, ticker)
+
     params = {
-        "symbol":     ticker,
+        "symbol":     td_symbol,
         "interval":   interval,
         "outputsize": outputsize,
         "apikey":     API_KEY,
@@ -106,7 +142,7 @@ async def fetch_ticker(
 
         if "values" not in data:
             msg = data.get("message", "Keine Daten von Twelve Data")
-            logger.warning(f"{ticker} [{interval}]: {msg}")
+            logger.warning(f"{ticker} [{interval}] (Twelve-Data-Symbol {td_symbol}): {msg}")
             return TickerQuote(ticker=ticker, bars=[], error=msg)
 
         # meta stammt aus derselben time_series-Antwort (kein zusätzlicher
@@ -135,8 +171,9 @@ async def fetch_ticker(
         return TickerQuote(ticker=ticker, bars=bars, currency=currency)
 
     except httpx.HTTPError as e:
-        logger.error(f"{ticker}: HTTP-Fehler – {e}")
-        return TickerQuote(ticker=ticker, bars=[], error=str(e))
+        message = _redact(str(e))
+        logger.error(f"{ticker}: HTTP-Fehler – {message}")
+        return TickerQuote(ticker=ticker, bars=[], error=message)
 
 
 # ── SSE Generator ─────────────────────────────────────────────

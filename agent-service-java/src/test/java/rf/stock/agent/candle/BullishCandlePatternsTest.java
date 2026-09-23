@@ -1,6 +1,7 @@
 package rf.stock.agent.candle;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNull;
 
 import java.util.ArrayList;
@@ -30,44 +31,61 @@ import rf.stock.agent.model.OhlcvBar;
  */
 class BullishCandlePatternsTest {
 
+    /**
+     * Hammer nutzt seit 06.09. ADX statt der GD-Kaskade (siehe
+     * BullishCandlePatterns-Klassenkommentar) UND zusätzlich HammerOpenRule/
+     * HammerPositionRule, die vorher gar nicht geprüft wurden. Die
+     * Testkerzen unten sind numerisch gegen die echte ta4j-ADX(5)/DI(5)-
+     * Formel vorab verifiziert (siehe HammerPatternTest für Details) - die
+     * frühere Unterscheidung "SMA-Downtrend" vs. "Price-Action-Downtrend"
+     * (aus der alten, jetzt unbenutzten DowntrendRule) ist für Hammer nicht
+     * mehr relevant, da ADX ein einziger, unified Trend-Indikator ist.
+     * gdPeriod ist für Hammer jetzt immer null (kein GD involviert).
+     */
     @Test
     void shouldDetectHammerAfterLowerHighsAndLowerLows() {
 
         List<OhlcvBar> bars = concat(
-                // 19 Kerzen Downtrend (GD-kompatibel)
-                decliningRun(19, 30.0, 0.7),
+                decliningRun(20, 200.0, 2.0),
 
-                // Hammer
-                List.of(bar(16.40, 16.55, 14.30, 16.48)));
+                // Verifiziert: Vorkerze (letzte der Serie) O=162 H=162.4 L=159.6
+                // C=160, Range=2.8, unteres Drittel bis 160.53. Hammer-Body
+                // [159.7,159.9] liegt darin; unterer Docht 13.5x Body, oberer
+                // Docht 0.75x Body. Open 159.7 < PrevClose 160.
+                List.of(bar(159.7, 160.05, 157.0, 159.9)));
 
         CandlePatternResult result = BullishCandlePatterns.detect(bars);
 
         assertEquals("Hammer", result.pattern());
-        assertEquals(200, result.gdPeriod());
+        assertNull(result.gdPeriod());
+        assertFalse(result.confirmed());
     }
 
     @Test
     void shouldDetectHammerAfterLowerCloses() {
 
         List<OhlcvBar> bars = concat(
-                decliningRun(19, 30.0, 0.65),
+                decliningRun(20, 100.0, 1.0),
 
-                // Hammer
-                List.of(bar(17.20, 17.35, 15.20, 17.28)));
+                // Verifiziert: Vorkerze (letzte der Serie) O=81 H=81.2 L=79.8 C=80,
+                // Range=1.4, unteres Drittel bis 80.27. Hammer-Body [79.9,80.1]
+                // liegt darin; unterer Docht 9.5x Body, oberer Docht 0.25x Body.
+                List.of(bar(79.9, 80.15, 78.0, 80.1)));
 
         CandlePatternResult result = BullishCandlePatterns.detect(bars);
 
         assertEquals("Hammer", result.pattern());
-        assertEquals(200, result.gdPeriod());
+        assertNull(result.gdPeriod());
+        assertFalse(result.confirmed());
     }
 
     @Test
     void shouldNotDetectHammerWithoutDowntrend() {
 
         List<OhlcvBar> bars = concat(
-                risingRun(19, 12.0, 0.5),
+                risingRun(20, 12.0, 0.5),
 
-                // Hammerform vorhanden, aber kein Downtrend davor
+                // Hammerform vorhanden, aber Aufwärtstrend davor (+DI > -DI)
                 List.of(bar(22.0, 22.1, 19.8, 22.05)));
 
         CandlePatternResult result = BullishCandlePatterns.detect(bars);
@@ -169,7 +187,8 @@ class BullishCandlePatternsTest {
         CandlePatternResult result = BullishCandlePatterns.detect(bars);
 
         assertEquals("Bullish Engulfing", result.pattern());
-        assertEquals(200, result.gdPeriod());
+        assertNull(result.gdPeriod());
+        assertFalse(result.confirmed());
     }
 
     @Test
@@ -188,7 +207,8 @@ class BullishCandlePatternsTest {
         CandlePatternResult result = BullishCandlePatterns.detect(bars);
 
         assertEquals("Bullish Engulfing", result.pattern());
-        assertEquals(200, result.gdPeriod());
+        assertNull(result.gdPeriod());
+        assertFalse(result.confirmed());
     }
 
     @Test

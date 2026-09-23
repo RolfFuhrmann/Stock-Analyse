@@ -75,7 +75,7 @@ public class BearishCandlePatterns {
         // Abandoned Baby bleibt Eigenentwicklung (kein ta4j-Äquivalent vorhanden, kein GD).
         CandleUtils candleSticksUtil = new CandleUtils(candleSticksToValidate);
         if (detectAbandonedBaby(candleSticksUtil))
-            return new CandlePatternResult("Bearish Abandoned Baby", 5, null);
+            return new CandlePatternResult("Bearish Abandoned Baby", 5, null, null, false);
 
         BarSeries series = ElliottAnalysisUtil.toBarSeries(candleSticksToValidate);
         int index = series.getEndIndex();

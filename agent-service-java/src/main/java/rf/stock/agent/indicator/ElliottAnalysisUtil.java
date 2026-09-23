@@ -294,7 +294,7 @@ public final class ElliottAnalysisUtil {
         return series;
     }
 
-    static Instant parseBarDate(String date) {
+    public static Instant parseBarDate(String date) {
         try {
             return Instant.parse(date);
         } catch (DateTimeParseException e1) {

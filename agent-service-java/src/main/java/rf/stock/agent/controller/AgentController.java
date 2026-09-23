@@ -16,8 +16,10 @@ import java.util.UUID;
 
 /**
  * REST-Endpunkte des Agent Service.
- * API-Vertrag identisch zum Python-Agent – der Angular-Client kann ohne
- * Anpassung gegen diesen Service zeigen (anderer Port: 8020 statt 8010).
+ * API-Vertrag identisch zum ehemaligen Python-Agent – der Angular-Client
+ * zeigt seit der Migration ohne Anpassung auf diesen Service (Port 8016).
+ * Der Python-Agent (Port 8010) wurde am 09.09. entfernt (siehe
+ * docker-compose.yml) - vollständig durch diesen Service ersetzt.
  */
 @RestController
 public class AgentController {

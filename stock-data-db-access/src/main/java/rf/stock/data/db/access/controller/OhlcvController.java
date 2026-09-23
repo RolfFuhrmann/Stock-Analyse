@@ -28,19 +28,19 @@ import java.util.List;
  *   GET    /api/ohlcv/daily/{ticker}           – alle Tageskerzen
  *   GET    /api/ohlcv/daily/{ticker}?from=&to= – Datumsbereich
  *   GET    /api/ohlcv/daily/{ticker}/latest?n= – neueste N Kerzen
- *   POST   /api/ohlcv/daily/bulk              – Bulk-Insert (history-fetcher)
+ *   POST   /api/ohlcv/daily/bulk              – Bulk-Upsert (history-fetcher, agent-service-java)
  *
  * ── Stundenkerzen ────────────────────────────────────────────────────────────
  *   GET    /api/ohlcv/hourly/{ticker}           – alle Stundenkerzen
  *   GET    /api/ohlcv/hourly/{ticker}?from=&to= – Zeitbereich
  *   GET    /api/ohlcv/hourly/{ticker}/latest?n= – neueste N Kerzen
- *   POST   /api/ohlcv/hourly/bulk              – Bulk-Insert (history-fetcher)
+ *   POST   /api/ohlcv/hourly/bulk              – Bulk-Upsert (history-fetcher, agent-service-java)
  *
  * ── 4-Stunden-Kerzen ─────────────────────────────────────────────────────────
  *   GET    /api/ohlcv/4h/{ticker}               – alle 4h-Kerzen
  *   GET    /api/ohlcv/4h/{ticker}?from=&to=     – Zeitbereich
  *   GET    /api/ohlcv/4h/{ticker}/latest?n=     – neueste N Kerzen
- *   POST   /api/ohlcv/4h/bulk                  – Bulk-Insert (history-fetcher)
+ *   POST   /api/ohlcv/4h/bulk                  – Bulk-Upsert (history-fetcher, agent-service-java)
  *
  * ── Fetch-Log ────────────────────────────────────────────────────────────────
  *   GET    /api/ohlcv/fetch-log/{ticker}       – Abruf-Protokoll pro Ticker
@@ -57,6 +57,16 @@ import java.util.List;
 public class OhlcvController {
 
     private final OhlcvService service;
+
+    /**
+     * Alle Ticker mit tatsächlichen OHLCV-Daten und Zeilenzahl je Tabelle (21.09.) -
+     * Grundlage für die ML-Trainingsauswahl, unabhängig von ticker_meta/Listen
+     * (siehe OhlcvService.getTickerCoverage).
+     */
+    @GetMapping("/tickers")
+    public ResponseEntity<List<TickerCoverage>> getTickerCoverage() {
+        return ResponseEntity.ok(service.getTickerCoverage());
+    }
 
     // ── TickerMeta ────────────────────────────────────────────────────────────
 

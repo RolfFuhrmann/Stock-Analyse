@@ -3,6 +3,7 @@ ml-service/app/api/db_client.py
 Lädt OHLCV-Daten aus dem stock-data-db-access Service.
 """
 import logging
+from urllib.parse import quote
 
 import httpx
 import pandas as pd
@@ -15,11 +16,21 @@ TIMEOUT = httpx.Timeout(60.0)
 
 
 async def get_all_tickers() -> list[str]:
-    """Gibt alle bekannten Ticker aus ticker_meta zurück."""
+    """
+    Gibt alle Ticker zurück, für die tatsächlich OHLCV-Daten vorliegen (21.09.,
+    vorher: alle Ticker aus ticker_meta). ticker_meta wird nur vom
+    history-fetcher gepflegt (beim Abruf für seine konfigurierten Listen) -
+    ein Ticker, der ausschließlich über den Live-Write-back des
+    agent-service-java Daten bekommen hat (z.B. eine neu erstellte Liste, die
+    der Fetcher noch nie gesehen hat), tauchte dort nie auf. Das Training blieb
+    dadurch faktisch auf die dem Fetcher bekannten Listen beschränkt. Die neue
+    Quelle `/api/ohlcv/tickers` zählt direkt in den OHLCV-Tabellen nach und ist
+    unabhängig von Listen/ticker_meta.
+    """
     async with httpx.AsyncClient(timeout=TIMEOUT) as client:
-        resp = await client.get(f"{BASE}/api/ohlcv/meta")
+        resp = await client.get(f"{BASE}/api/ohlcv/tickers")
         resp.raise_for_status()
-        return [m["ticker"] for m in resp.json()]
+        return [t["ticker"] for t in resp.json()]
 
 
 async def get_daily_bars(ticker: str, limit: int = 0) -> pd.DataFrame | None:
@@ -30,10 +41,10 @@ async def get_daily_bars(ticker: str, limit: int = 0) -> pd.DataFrame | None:
     try:
         async with httpx.AsyncClient(timeout=TIMEOUT) as client:
             if limit > 0:
-                url  = f"{BASE}/api/ohlcv/daily/{ticker}/latest"
+                url  = f"{BASE}/api/ohlcv/daily/{quote(ticker, safe='')}/latest"
                 resp = await client.get(url, params={"n": limit})
             else:
-                url  = f"{BASE}/api/ohlcv/daily/{ticker}"
+                url  = f"{BASE}/api/ohlcv/daily/{quote(ticker, safe='')}"
                 resp = await client.get(url)
 
             if resp.status_code == 404:
@@ -75,7 +86,7 @@ async def get_all_daily_bars() -> dict[str, pd.DataFrame]:
 
     for ticker in tickers:
         df = await get_daily_bars(ticker)
-        if df is not None and len(df) >= 100:
+        if df is not None and len(df) >= settings.min_daily_candles:
             result[ticker] = df
             logger.info(f"  [{ticker}] {len(df)} Tageskerzen geladen")
         else:
@@ -93,10 +104,10 @@ async def get_4h_bars(ticker: str, limit: int = 0) -> pd.DataFrame | None:
     try:
         async with httpx.AsyncClient(timeout=TIMEOUT) as client:
             if limit > 0:
-                url  = f"{BASE}/api/ohlcv/4h/{ticker}/latest"
+                url  = f"{BASE}/api/ohlcv/4h/{quote(ticker, safe='')}/latest"
                 resp = await client.get(url, params={"n": limit})
             else:
-                url  = f"{BASE}/api/ohlcv/4h/{ticker}"
+                url  = f"{BASE}/api/ohlcv/4h/{quote(ticker, safe='')}"
                 resp = await client.get(url)
 
             if resp.status_code == 404:
@@ -134,10 +145,10 @@ async def get_hourly_bars(ticker: str, limit: int = 0) -> pd.DataFrame | None:
     try:
         async with httpx.AsyncClient(timeout=TIMEOUT) as client:
             if limit > 0:
-                url  = f"{BASE}/api/ohlcv/hourly/{ticker}/latest"
+                url  = f"{BASE}/api/ohlcv/hourly/{quote(ticker, safe='')}/latest"
                 resp = await client.get(url, params={"n": limit})
             else:
-                url  = f"{BASE}/api/ohlcv/hourly/{ticker}"
+                url  = f"{BASE}/api/ohlcv/hourly/{quote(ticker, safe='')}"
                 resp = await client.get(url)
 
             if resp.status_code == 404:
@@ -184,17 +195,17 @@ async def get_all_bars_by_interval() -> dict[str, dict[str, pd.DataFrame]]:
     for ticker in tickers:
         # Daily
         df = await get_daily_bars(ticker)
-        if df is not None and len(df) >= 100:
+        if df is not None and len(df) >= settings.min_daily_candles:
             result["1d"][ticker] = df
 
         # 4h
         df = await get_4h_bars(ticker)
-        if df is not None and len(df) >= 200:
+        if df is not None and len(df) >= settings.min_4h_candles:
             result["4h"][ticker] = df
 
         # 1h
         df = await get_hourly_bars(ticker)
-        if df is not None and len(df) >= 200:
+        if df is not None and len(df) >= settings.min_1h_candles:
             result["1h"][ticker] = df
 
     logger.info(

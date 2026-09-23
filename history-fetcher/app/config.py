@@ -26,10 +26,29 @@ class Settings(BaseSettings):
     # 1h-Kerzen: Update-Puffer in Stunden (24h ≈ 1 Handelstag Reserve)
     update_hourly_buffer_hours: int = 24
 
-    # ── Scheduler ─────────────────────────────────────────────
+    # ── Automatischer Betrieb ─────────────────────────────────
+    # Standard: AUS (20.09.). Der Fetcher läuft nur manuell, um Daten in der
+    # DB zu reparieren: POST /fetch/update (fehlende Kerzen nachholen) bzw.
+    # POST /fetch/initial (alles neu abrufen und überschreiben). Aktuell
+    # gehalten werden aktiv genutzte Ticker durch den Write-back des
+    # agent-service-java. true schaltet zusätzlich den täglichen Cron-Lauf
+    # und den Catch-up bei jedem Container-Start wieder ein (Env:
+    # AUTO_RUN_ENABLED; die frühere Variable AUTO_INITIAL_RUN wird nicht
+    # mehr gelesen).
+    auto_run_enabled: bool = False
+
+    # ── Scheduler (nur relevant bei auto_run_enabled=true) ────
     # Uhrzeit für den täglichen Update-Lauf (nach Börsenschluss)
     daily_update_hour:   int = 20
     daily_update_minute: int = 0
+    # Zeitzone für den Cron-Zeitpunkt, unabhängig von der Container-Systemzeit
+    # explizit gesetzt (siehe TZ/tzdata-Hinweis in Dockerfile).
+    scheduler_timezone:  str = "Europe/Berlin"
+    # Toleranz in Stunden, falls der geplante Lauf verpasst wurde (z.B. weil
+    # der Host-Rechner zur geplanten Zeit im Schlaf-/Ruhezustand war). Ohne
+    # diese Einstellung verwendet APScheduler nur 1 Sekunde Toleranz und
+    # überspringt einen verpassten Lauf komplett, statt ihn nachzuholen.
+    misfire_grace_hours: int = 12
 
     # ── HTTP ──────────────────────────────────────────────────
     # Timeout in Sekunden für SSE-Streams vom Yahoo/TwelveData-Service

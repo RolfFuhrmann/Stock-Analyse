@@ -46,4 +46,22 @@ public interface FetchLogRepository extends JpaRepository<FetchLog, Long> {
         ORDER BY f.ticker
         """)
     List<FetchLog> findLatestPerTicker();
+
+    /**
+     * Letzter SUCCESS-Lauf pro Ticker für EIN Intervall, in einem Query.
+     * Ersetzt in OhlcvService.getCoverage() den bisherigen findLastSuccess()-
+     * Aufruf INNERHALB der Ticker-Schleife (1 Query pro Ticker).
+     */
+    @Query("""
+        SELECT f FROM FetchLog f
+        WHERE f.intervalType = :intervalType
+          AND f.status = 'SUCCESS'
+          AND f.runAt = (
+              SELECT MAX(f2.runAt) FROM FetchLog f2
+              WHERE f2.ticker = f.ticker
+                AND f2.intervalType = :intervalType
+                AND f2.status = 'SUCCESS'
+          )
+        """)
+    List<FetchLog> findLastSuccessPerTicker(@Param("intervalType") String intervalType);
 }

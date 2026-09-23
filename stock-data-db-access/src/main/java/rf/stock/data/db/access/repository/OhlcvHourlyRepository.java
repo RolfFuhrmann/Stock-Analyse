@@ -12,6 +12,10 @@ import java.util.Optional;
 
 public interface OhlcvHourlyRepository extends JpaRepository<OhlcvHourly, Long> {
 
+    /** Ticker mit Zeilenzahl, für die ML-Trainingsauswahl (21.09.) - unabhängig von ticker_meta. */
+    @Query("SELECT o.ticker, COUNT(o) FROM OhlcvHourly o GROUP BY o.ticker")
+    List<Object[]> countRowsByTicker();
+
     List<OhlcvHourly> findByTickerOrderByTradeTimeAsc(String ticker);
 
     List<OhlcvHourly> findByTickerAndTradeTimeBetweenOrderByTradeTimeAsc(
@@ -29,7 +33,14 @@ public interface OhlcvHourlyRepository extends JpaRepository<OhlcvHourly, Long> 
     @Query("SELECT MAX(o.tradeTime) FROM OhlcvHourly o WHERE o.ticker = :ticker")
     Optional<LocalDateTime> findLatestTradeTimeByTicker(@Param("ticker") String ticker);
 
+    /** Anzahl GRUPPIERT nach Ticker, in einem Query (siehe OhlcvDailyRepository.aggregateByTicker). */
+    @Query("SELECT o.ticker, COUNT(o) FROM OhlcvHourly o GROUP BY o.ticker")
+    List<Object[]> countGroupByTicker();
+
     boolean existsByTickerAndTradeTime(String ticker, LocalDateTime tradeTime);
+
+    /** Für Upsert: liefert die vorhandene Kerze, falls schon vorhanden. */
+    Optional<OhlcvHourly> findByTickerAndTradeTime(String ticker, LocalDateTime tradeTime);
 
     long countByTicker(String ticker);
 

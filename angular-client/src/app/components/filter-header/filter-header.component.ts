@@ -124,6 +124,16 @@ import { DataSource, FilterState, Interval, INTERVAL_LABELS, INTERVAL_LOOKBACK }
             <mat-icon>picture_as_pdf</mat-icon> Als PDF speichern
           </button>
         </div>
+
+        <div class="divider"></div>
+
+        <!-- Einstellungen (Off-Canvas: VPN-Daten, IP wechseln) -->
+        <button mat-icon-button class="btn-settings"
+                (click)="onSettings()"
+                aria-label="Einstellungen öffnen"
+                matTooltip="Einstellungen">
+          <mat-icon>settings</mat-icon>
+        </button>
       </div>
 
       @if (loading()) {
@@ -201,6 +211,7 @@ export class FilterHeaderComponent implements OnChanges {
   readonly exportPdf = output<void>();
   readonly stop      = output<void>();
   readonly home      = output<void>();
+  readonly settings  = output<void>();
 
   readonly source       = signal<DataSource>('yahoo');
   readonly interval     = signal<Interval>('1d');
@@ -242,6 +253,7 @@ export class FilterHeaderComponent implements OnChanges {
   }
   onTickerInput(val: string): void          { this.tickerInput.set(val); }
   onHome(): void                          { this.home.emit(); }
+  onSettings(): void                      { this.settings.emit(); }
 
   onAnalyze(): void {
     if (this.tickerCount() === 0 || this.loading()) return;

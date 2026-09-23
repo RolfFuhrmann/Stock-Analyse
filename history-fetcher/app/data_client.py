@@ -282,8 +282,8 @@ async def fetch_4h_bars(
 
     Yahoo:      unterstützt kein natives 4h-Interval →
                 1h-Kerzen abrufen und zu 4h aggregieren.
-                Xetra-Blöcke: 08:00–11:59 / 12:00–15:59 / 16:00–19:59 UTC+2
-                Entspricht UTC: 06:00 / 10:00 / 14:00
+                Zeitstempel sind lokale Börsenzeit ohne Zone (nicht UTC).
+                Xetra-Blöcke: 08:00–11:59 / 12:00–15:59 / 16:00–19:59
     TwelveData: interval="4h" nativ verfügbar, direkt abrufen.
     """
     if source == "yahoo":
@@ -366,15 +366,15 @@ def _aggregate_1h_to_4h(bars_1h: list[dict]) -> list[dict]:
     """
     Aggregiert 1h-Kerzen zu 4h-Blöcken.
 
-    Blockgrenzen (UTC) für Xetra / NYSE:
-      Xetra (UTC+2):  08:00–11:59 → UTC 06:00
-                      12:00–15:59 → UTC 10:00
-                      16:00–19:59 → UTC 14:00
-      NYSE  (UTC-5):  09:30–13:29 → UTC 14:30 (Block-Start 14:00)
-                      13:30–17:29 → UTC 18:30 (Block-Start 18:00)
+    Blockgrenzen in lokaler Börsenzeit (ohne Zone, NICHT UTC) - die
+    Zeitstempel der 1h-Kerzen sind bereits lokal (siehe _parse_bars_hourly):
+      Xetra:  08:00–11:59 (Kerzen 09,10,11), 12:00–15:59 (12–15),
+              16:00–19:59 (16,17)
+      NYSE:   Block 08:00 (Kerzen 09:30, 10:30, 11:30) und
+              Block 12:00 (Kerzen 12:30 bis 15:30)
 
     Implementierung: Jede Stunde wird dem nächst-niedrigeren
-    4h-Block-Start (0, 4, 8, 12, 16, 20 Uhr UTC) zugeordnet.
+    4h-Block-Start (0, 4, 8, 12, 16, 20 Uhr lokal) zugeordnet.
     Blöcke mit weniger als 2 Kerzen werden verworfen
     (unvollständige Handelsblöcke am Rand).
     """

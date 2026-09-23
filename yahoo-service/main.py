@@ -6,6 +6,7 @@ Delay zwischen Tickern verhindert Rate-Limiting.
 """
 
 import asyncio
+import ipaddress
 import json
 import logging
 import random
@@ -187,6 +188,92 @@ async def quote_stream(tickers: list[str], outputsize: int, interval: str = "1d"
 @app.get("/health")
 def health():
     return {"status": "ok", "service": "yahoo-service"}
+
+
+# ── Ausgangs-IP (VPN-Info für den Client, 21.09.) ─────────────
+# Dieser Service läuft im Netzwerk des VPN-Containers (Gluetun) - eine
+# Abfrage von hier zeigt daher die IP, unter der Yahoo uns sieht. Gluetuns
+# eigene Public-IP-Route bleibt nach einem VPN-Neustart teilweise leer
+# (Fetcher-Fehler direkt nach dem Tunnelaufbau), deshalb fragen wir selbst.
+#
+# Mehrere Anbieter nacheinander: Die IPs von Gratis-VPN-Servern werden von
+# vielen Nutzern geteilt, einzelne IP-Datenbanken lehnen sie dann ab (HTTP 429).
+# Der erste Anbieter mit brauchbarer Antwort gewinnt; als letzter Ausweg
+# liefert ipify nur die IP ohne Standort.
+IP_LOOKUP_TIMEOUT_SECONDS = 3  # 3 Anbieter + ipify = max. 12 s (agent-service-java wartet 15 s)
+IP_PLAIN_FALLBACK_URL = "https://api.ipify.org"
+
+
+def _valid_ip(value: object) -> str | None:
+    """Gibt den Wert nur zurück, wenn er wirklich eine IP-Adresse ist (kein HTML/Fehlertext)."""
+    if not isinstance(value, str):
+        return None
+    try:
+        return str(ipaddress.ip_address(value.strip()))
+    except ValueError:
+        return None
+
+
+def _parse_ipinfo(data: dict) -> dict:
+    return {"ip": data.get("ip"), "city": data.get("city"), "region": data.get("region"),
+            "country": data.get("country"), "organization": data.get("org")}
+
+
+def _parse_ipwhois(data: dict) -> dict:
+    if data.get("success") is False:
+        return {}
+    connection = data.get("connection") or {}
+    return {"ip": data.get("ip"), "city": data.get("city"), "region": data.get("region"),
+            "country": data.get("country_code"),
+            "organization": connection.get("org") or connection.get("isp")}
+
+
+def _parse_ipapi(data: dict) -> dict:
+    if data.get("error"):
+        return {}
+    return {"ip": data.get("ip"), "city": data.get("city"), "region": data.get("region"),
+            "country": data.get("country_code") or data.get("country"), "organization": data.get("org")}
+
+
+# (URL, Parser) - Länder immer als ISO-Code, der Client übersetzt in den Namen
+IP_INFO_PROVIDERS = [
+    ("https://ipinfo.io/json", _parse_ipinfo),
+    ("https://ipwho.is/", _parse_ipwhois),
+    ("https://ipapi.co/json/", _parse_ipapi),
+]
+
+
+@app.get("/ip")
+def exit_ip():
+    """
+    Ausgangs-IP dieses Containers (= VPN-IP) plus Standort/Anbieter.
+    ip=None, wenn aktuell keine Verbindung besteht (z.B. Tunnel im Aufbau).
+    """
+    empty = {"ip": None, "city": None, "region": None, "country": None, "organization": None}
+
+    for url, parse in IP_INFO_PROVIDERS:
+        try:
+            response = curl_requests.get(url, timeout=IP_LOOKUP_TIMEOUT_SECONDS)
+            if response.status_code != 200:
+                logger.warning(f"IP-Abfrage {url}: HTTP {response.status_code}")
+                continue
+            info = parse(response.json())
+            ip = _valid_ip(info.get("ip"))
+            if ip:
+                return {**empty, **info, "ip": ip}
+        except Exception as e:
+            logger.warning(f"IP-Abfrage {url} fehlgeschlagen: {e}")
+
+    # Letzter Ausweg: nur die IP, ohne Standortdaten
+    try:
+        response = curl_requests.get(IP_PLAIN_FALLBACK_URL, timeout=IP_LOOKUP_TIMEOUT_SECONDS)
+        ip = _valid_ip(response.text) if response.status_code == 200 else None
+        if ip:
+            return {**empty, "ip": ip}
+    except Exception as e:
+        logger.warning(f"IP-Abfrage {IP_PLAIN_FALLBACK_URL} fehlgeschlagen: {e}")
+
+    return empty
 
 
 @app.post("/quotes/stream")

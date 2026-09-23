@@ -9,6 +9,7 @@ FastAPI-App mit:
 Endpunkte:
   GET  /health                    – Liveness-Check
   GET  /model/status              – Modell-Metadaten + Trainings-Metriken
+  GET  /model/info                – aufbereitete Modell-Info für den Client (deutsche Labels)
   POST /model/train               – Training manuell starten
   POST /predict/{ticker}          – Umkehrwahrscheinlichkeit für einen Ticker
   POST /predict/batch             – Vorhersagen für mehrere Ticker
@@ -27,6 +28,7 @@ from pydantic import BaseModel
 
 from app.api.db_client import get_all_daily_bars, get_daily_bars, get_4h_bars, get_hourly_bars, get_all_bars_by_interval
 from app.config import settings
+from app.features.labels import label_of
 from app.model import predictor
 from app.model.trainer import META_PATH, load_meta, train
 
@@ -157,6 +159,7 @@ class PredictResponse(BaseModel):
     signal:          str
     confidence:      str
     top_features:    dict
+    explanation:     dict | None = None
     model_available: bool
     error:           str | None = None
 
@@ -187,6 +190,58 @@ def model_status():
         "next_retrain":   next_run,
         "last_train":     _last_train or None,
         "model_meta":     meta,
+    }
+
+
+@app.get("/model/info")
+def model_info():
+    """
+    Aufbereitete Modell-Info für die Anzeige im Client (Einstellungen → KI-Modell).
+    Enthält deutsche Feature-Labels, die Signal-Schwellen und Diagnosedaten
+    (Zusammensetzung der Testmenge, Kalibrierung), sobald sie im Training
+    berechnet wurden (Modelle vor dem 21.09. haben diese Felder noch nicht).
+    """
+    meta = load_meta()
+    if meta is None:
+        return {"model_ready": False}
+
+    importance = meta.get("feature_importance_all") or meta.get("feature_importance") or {}
+    next_run = None
+    job = scheduler.get_job("weekly_retrain")
+    if job and job.next_run_time:
+        next_run = job.next_run_time.isoformat()
+
+    return {
+        "model_ready":       True,
+        "training_active":   _training,
+        "trained_at":        meta.get("trained_at"),
+        "next_retrain":      next_run,
+        "total_samples":     meta.get("total_samples"),
+        "train_samples":     meta.get("train_samples"),
+        "test_samples":      meta.get("test_samples"),
+        "tickers_count":     len({t.split("/")[0] for t in meta.get("tickers", [])}),
+        "positive_rate_pct": meta.get("positive_rate_pct"),
+        "forecast_horizon":  meta.get("forecast_horizon"),
+        "reversal_threshold_pct": meta.get("reversal_threshold"),
+        "intervals_trained": meta.get("intervals_trained", []),
+        "scale_pos_weight":  meta.get("scale_pos_weight"),
+        # False bei Modellen, die noch vor dem 21.09. trainiert wurden (kein
+        # Kalibrator vorhanden) - der Modellwert ist dann unkalibriert, siehe
+        # das Feld "calibrated" in der Anzeige.
+        "calibrated":        meta.get("calibrated", False),
+        "val_samples":       meta.get("val_samples"),
+        "metrics":           meta.get("backtesting", {}),
+        "thresholds": {
+            "weak":     round(predictor.THRESHOLD_WEAK * 100),
+            "moderate": round(predictor.THRESHOLD_MODERATE * 100),
+            "strong":   round(predictor.THRESHOLD_STRONG * 100),
+        },
+        "feature_importance": [
+            {"feature": name, "label": label_of(name), "importance": value}
+            for name, value in list(importance.items())[:12]
+        ],
+        "breakdown":         meta.get("breakdown"),
+        "calibration":       meta.get("calibration"),
     }
 
 

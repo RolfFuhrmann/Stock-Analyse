@@ -1,0 +1,4 @@
+[[roles]]
+name = "vpn-rotate"
+routes = ["GET /v1/publicip/ip", "GET /v1/vpn/status", "PUT /v1/vpn/status"]
+auth = "none"

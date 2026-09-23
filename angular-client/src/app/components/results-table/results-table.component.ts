@@ -6,6 +6,7 @@ import { MatIconModule } from '@angular/material/icon';
 import { MatTableModule } from '@angular/material/table';
 import { MatTooltipModule } from '@angular/material/tooltip';
 import { ElliottChartModalComponent } from '../elliott-chart-modal/elliott-chart-modal.component';
+import { MlExplanationModalComponent } from '../ml-explanation-modal/ml-explanation-modal.component';
 import { ElliottChartThumbnailComponent } from '../elliott-chart-thumbnail/elliott-chart-thumbnail.component';
 import { StockResult } from '../../models/stock.models';
 import { currencySymbol } from '../../shared/currency.util';
@@ -35,6 +36,14 @@ type SortDir = 'asc' | 'desc' | null;
  *   - Grüner Hintergrund: alle 3 Kriterien erfüllt
  *   - Gelber Hintergrund: 2 von 3 Kriterien erfüllt
  */
+/** Ausgeschriebene Signalstufen für die Erklärung des KI-Werts. */
+const RESULT_SIGNAL_TEXT: Record<StockResult['ml_signal'], string> = {
+  strong:   'Starkes Signal',
+  moderate: 'Mittleres Signal',
+  weak:     'Schwaches Signal',
+  none:     'Kein Signal',
+};
+
 @Component({
   selector: 'app-results-table',
   standalone: true,
@@ -194,11 +203,11 @@ type SortDir = 'asc' | 'desc' | null;
               Candlestick Pattern <mat-icon class="sort-icon">{{ sortIcon('candle') }}</mat-icon>
             </th>
             <td mat-cell *matCellDef="let row" class="col-candle">
-              @if (row.candle_pattern) {
+              @if (row.candle.pattern) {
                 <span
-                  [class]="'candle-badge candle-s' + row.candle_strength"
-                  [matTooltip]="candleTooltip(row.candle_strength) + candleGdTooltipSuffix(row)"
-                  >{{ row.candle_pattern }}{{ row.candle_gd_period ? ' (GD' + row.candle_gd_period + ')' : '' }}</span
+                  [class]="'candle-badge candle-s' + row.candle.strength"
+                  [matTooltip]="candleTooltip(row.candle.strength) + candleGdTooltipSuffix(row)"
+                  >{{ row.candle.pattern }}{{ row.candle.confirmed ? ' (bestätigt)' : '' }}{{ row.candle.gd_period ? ' (GD' + row.candle.gd_period + ')' : '' }}</span
                 >
               } @else {
                 <span class="candle-none">–</span>
@@ -213,7 +222,7 @@ type SortDir = 'asc' | 'desc' | null;
               *matHeaderCellDef
               class="col-center sortable-header"
               (click)="sortBy('ml')"
-              matTooltip="KI-Umkehrwahrscheinlichkeit (XGBoost) für die nächsten 5 Tage"
+              matTooltip="KI-Modellwert (XGBoost): Anstieg über 3 % in den nächsten 5 Kerzen – Klick auf den Wert erklärt ihn"
             >
               KI-Signal <mat-icon class="sort-icon">{{ sortIcon('ml') }}</mat-icon>
             </th>
@@ -221,7 +230,13 @@ type SortDir = 'asc' | 'desc' | null;
               @if (!row.ml_available) {
                 <span class="ml-unavailable" matTooltip="ML-Service nicht verfügbar">–</span>
               } @else if (row.reversal_pct != null) {
-                <span [class]="'ml-badge ml-' + row.ml_signal" [matTooltip]="mlTooltip(row)">
+                <span [class]="'ml-badge ml-' + row.ml_signal"
+                      [class.ml-clickable]="!!row.ml_explanation"
+                      [attr.role]="row.ml_explanation ? 'button' : null"
+                      [attr.tabindex]="row.ml_explanation ? 0 : null"
+                      [matTooltip]="mlTooltip(row)"
+                      (click)="openMlExplanation(row)"
+                      (keydown.enter)="openMlExplanation(row)">
                   {{ row.reversal_pct.toFixed(0) }}%
                   @if (row.ml_signal !== 'none') {
                     <span class="ml-signal-label">{{ mlSignalLabel(row.ml_signal) }}</span>
@@ -475,6 +490,8 @@ type SortDir = 'asc' | 'desc' | null;
       }
 
       /* ML-Signal Badge */
+      .ml-clickable { cursor: pointer; }
+      .ml-clickable:hover { filter: brightness(0.95); }
       .ml-badge {
         display: inline-flex;
         align-items: center;
@@ -609,7 +626,7 @@ export class ResultsTableComponent {
         case 'direction':
           return f * (a.macd_stoch_direction ?? '').localeCompare(b.macd_stoch_direction ?? '');
         case 'candle':
-          return f * ((a.candle_strength ?? 0) - (b.candle_strength ?? 0));
+          return f * ((a.candle.strength ?? 0) - (b.candle.strength ?? 0));
         case 'ml':
           return f * ((a.reversal_pct ?? -1) - (b.reversal_pct ?? -1));
         default:
@@ -689,7 +706,26 @@ export class ResultsTableComponent {
       weak: 'Schwaches Signal',
       none: 'Kein Signal',
     };
-    return `KI-Umkehrsignal: ${sig[row.ml_signal] ?? '–'} | Konfidenz: ${conf[row.ml_confidence] ?? '–'} | Wahrscheinlichkeit: ${row.reversal_pct?.toFixed(1) ?? '–'}%`;
+    const hint = row.ml_explanation ? ' | Klick: Warum dieser Wert?' : '';
+    return `KI-Umkehrsignal: ${sig[row.ml_signal] ?? '–'} | Konfidenz: ${conf[row.ml_confidence] ?? '–'} | Modellwert: ${row.reversal_pct?.toFixed(1) ?? '–'}%${hint}`;
+  }
+
+  /** Öffnet die Erklärung des KI-Werts ("Warum dieser Wert?") - nur wenn der ml-service eine liefert. */
+  openMlExplanation(row: StockResult): void {
+    if (!row.ml_explanation || row.reversal_pct == null) {
+      return;
+    }
+    this.dialog.open(MlExplanationModalComponent, {
+      data: {
+        ticker: row.ticker,
+        name: row.name,
+        reversalPct: row.reversal_pct,
+        signalLabel: RESULT_SIGNAL_TEXT[row.ml_signal],
+        explanation: row.ml_explanation,
+      },
+      width: '560px',
+      maxWidth: '92vw',
+    });
   }
 
   /** Öffnet das große Elliott-Wave-Chart-Modal für die angeklickte Zeile. */
@@ -719,10 +755,10 @@ export class ResultsTableComponent {
 
   /** Tooltip-Zusatz für die Candlestick-Pattern-Spalte, z.B. " · unterhalb GD200". Leer, falls kein GD ermittelt wurde. */
   candleGdTooltipSuffix(row: StockResult): string {
-    if (!row.candle_gd_period || !row.candle_pattern) {
+    if (!row.candle.gd_period || !row.candle.pattern) {
       return '';
     }
-    return ` · ${this.candleGdDirection(row.candle_pattern)} GD${row.candle_gd_period}`;
+    return ` · ${this.candleGdDirection(row.candle.pattern)} GD${row.candle.gd_period}`;
   }
 
   candleTooltip(strength: number): string {

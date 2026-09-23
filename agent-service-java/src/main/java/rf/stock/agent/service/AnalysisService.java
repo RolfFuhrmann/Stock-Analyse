@@ -18,15 +18,25 @@ import rf.stock.agent.model.IndicatorResult;
 import rf.stock.agent.model.OhlcvBar;
 import rf.stock.agent.model.StockResult;
 import rf.stock.agent.model.TickerQuote;
+import rf.stock.agent.util.IntradayBarUtil;
 
 /**
  * Zentrale Analyse-Logik des Agent Service.
  * Portiert aus main.py – Verhalten und Datenformat bewusst identisch gehalten,
  * damit der Angular-Client ohne Anpassung funktioniert.
  *
- * Routing:
- * interval=1d → SSE-Stream von Yahoo/TwelveData (Live-Daten)
- * interval=4h/1h → Kerzen aus DB-Access-Service (historisch, kein SSE)
+ * Routing (seit 20.09. alle Intervalle live):
+ * interval=1d → SSE-Stream von Yahoo/TwelveData (Tageskerzen)
+ * interval=4h/1h → SSE-Stream von Yahoo/TwelveData (Intraday-Kerzen, siehe
+ * analyzeIntraday: Yahoo liefert nur 1h, 4h wird daraus berechnet;
+ * TwelveData liefert 1h und 4h nativ)
+ *
+ * Write-back: bei jeder Live-Analyse werden die aktuellsten Kerzen
+ * zusätzlich asynchron zurück in die DB geschrieben (1d: DailyBarWriteBackService,
+ * 1h/4h: IntradayBarWriteBackService, jeweils dieselbe Logik: letzte 5
+ * Handelstage überschreiben, fehlende Kerzen ergänzen) - hält aktiv genutzte
+ * Ticker aktuell, ohne auf den history-fetcher-Cron warten zu müssen. Der
+ * Fetcher bleibt parallel als Vollständigkeits-Sicherheitsnetz aktiv.
  */
 @Service
 public class AnalysisService {
@@ -63,10 +73,27 @@ public class AnalysisService {
             "4h", 300,
             "1h", 300);
 
+    /**
+     * Obergrenze für outputsize bei Yahoo-Stundendaten (yahoo-service rechnet
+     * daraus die abzufragende Periode in Tagen). Wert wie im history-fetcher
+     * (data_client.fetch_4h_bars): dort wurde beobachtet, dass Yahoo bei zu
+     * großem outputsize nicht mehr korrekte Stundendaten liefert (1440 →
+     * Tageskerzen statt Stundenkerzen, 82 → korrekt). 600 liefert ca. 95
+     * Kalendertage - für die 180 4h-Kerzen des Elliott-Lookbacks reicht das
+     * bei Xetra-Werten (3 Blöcke/Tag), bei US-Werten (2 Blöcke/Tag) sind es
+     * nur ca. 130 4h-Kerzen. Bei Bedarf hier anheben, nachdem gegen Yahoo
+     * geprüft wurde, ab wann die Stundendaten abbrechen.
+     */
+    private static final int YAHOO_HOURLY_MAX_OUTPUTSIZE = 600;
+
+    /** Zusätzliche Kerzen über den Lookback hinaus (Einschwingphase der Indikatoren). */
+    private static final int OUTPUTSIZE_BUFFER = 40;
+
     private final ServiceConfig serviceConfig;
     private final DataServiceClient dataServiceClient;
-    private final DbClient dbClient;
     private final MlClient mlClient;
+    private final DailyBarWriteBackService writeBackService;
+    private final IntradayBarWriteBackService intradayWriteBackService;
 
     /** Session-Registry für Stop-Signale, analog zu _stop_events in Python. */
     private final Map<String, AtomicBoolean> stopFlags = new ConcurrentHashMap<>();
@@ -74,12 +101,14 @@ public class AnalysisService {
     public AnalysisService(
             ServiceConfig serviceConfig,
             DataServiceClient dataServiceClient,
-            DbClient dbClient,
-            MlClient mlClient) {
+            MlClient mlClient,
+            DailyBarWriteBackService writeBackService,
+            IntradayBarWriteBackService intradayWriteBackService) {
         this.serviceConfig = serviceConfig;
         this.dataServiceClient = dataServiceClient;
-        this.dbClient = dbClient;
         this.mlClient = mlClient;
+        this.writeBackService = writeBackService;
+        this.intradayWriteBackService = intradayWriteBackService;
     }
 
     public static int defaultLookback(String interval) {
@@ -124,29 +153,85 @@ public class AnalysisService {
                 source, interval, tickers.size(), sessionId, includeMl);
 
         Flux<StockResult> resultFlux = interval.equals("4h") || interval.equals("1h")
-                ? analyzeFromDb(tickers, source, interval, lookback, includeMl, stopFlag)
+                ? analyzeIntraday(tickers, source, interval, lookback, includeMl, stopFlag)
                 : analyzeFromSse(tickers, source, lookback, includeMl, stopFlag);
 
         return resultFlux.doFinally(signal -> stopFlags.remove(sessionId));
     }
 
-    // ── 4h/1h: Kerzen aus DB ─────────────────────────────────────────────────
+    // ── 4h/1h: Live-Abruf von Yahoo/TwelveData ───────────────────────────────
 
-    private Flux<StockResult> analyzeFromDb(
+    /**
+     * Intraday-Analyse (seit 20.09. live statt aus der DB).
+     *
+     * Abruf-Intervall je Quelle: Yahoo kann nur 1h - für die 4h-Ansicht wird
+     * aus den 1h-Kerzen aggregiert. TwelveData liefert 1h und 4h nativ.
+     * Die Zeitstempel werden vorab auf lokale Börsenzeit ohne Zone gekürzt
+     * (IntradayBarUtil) - Yahoo liefert "…T09:00:00+02:00", mit Offset könnte
+     * ElliottAnalysisUtil.parseBarDate sie nicht lesen, und es ist dasselbe
+     * Format, das der history-fetcher in der DB ablegt.
+     *
+     * Write-back passiert mit den abgerufenen Kerzen in Abruf-Granularität
+     * (bei Yahoo 1h - der Service leitet daraus zusätzlich die 4h-Kerzen für
+     * die DB ab), die Analyse bekommt die Kerzen der gewählten Ansicht.
+     */
+    private Flux<StockResult> analyzeIntraday(
             List<String> tickers,
             String source,
             String interval,
             int lookback,
             boolean includeMl,
             AtomicBoolean stopFlag) {
+        boolean yahoo = source.equals("yahoo");
+        String fetchInterval = yahoo || interval.equals("1h") ? "1h" : "4h";
+        String serviceUrl = yahoo ? serviceConfig.yahooUrl() : serviceConfig.twelvedataUrl();
         int elliottLookback = ELLIOTT_LOOKBACK_BY_INTERVAL.getOrDefault(interval, 200);
-        int n = Math.max(LOOKBACK_BY_INTERVAL.getOrDefault(interval, 200), elliottLookback);
+        int outputsize = intradayOutputsize(yahoo, interval, lookback, elliottLookback);
 
-        return Flux.fromIterable(tickers)
-                .takeWhile(t -> !stopFlag.get())
-                .concatMap(ticker -> dbClient.fetchQuote(ticker, interval, n)
-                        .map(quote -> analyseQuote(quote, lookback, elliottLookback, source, interval))
-                        .flatMap(result -> enrichWithMl(result, interval, includeMl)));
+        return dataServiceClient.streamQuotes(serviceUrl, tickers, outputsize, fetchInterval)
+                .takeWhile(q -> !stopFlag.get())
+                .map(AnalysisService::normalizeIntradayQuote)
+                .doOnNext(quote -> {
+                    if (!quote.hasError() && quote.hasBars()) {
+                        intradayWriteBackService.triggerAsync(quote.ticker(), source, fetchInterval, quote.bars());
+                    }
+                })
+                .map(quote -> yahoo && interval.equals("4h") ? aggregateQuoteTo4h(quote) : quote)
+                .map(quote -> analyseQuote(quote, lookback, elliottLookback, source, interval))
+                .concatMap(result -> enrichWithMl(result, interval, includeMl));
+    }
+
+    /**
+     * Anzahl abzurufender Kerzen (outputsize) für Intraday-Abrufe.
+     * Yahoo/1h-Ansicht und TwelveData zählen in Kerzen der Ansicht; für die
+     * Yahoo/4h-Ansicht wird die 4-fache Menge 1h-Kerzen benötigt, gedeckelt
+     * auf YAHOO_HOURLY_MAX_OUTPUTSIZE (siehe dort).
+     */
+    private static int intradayOutputsize(boolean yahoo, String interval, int lookback, int elliottLookback) {
+        int candles = Math.max(lookback, elliottLookback) + OUTPUTSIZE_BUFFER;
+        if (yahoo && interval.equals("4h")) {
+            return Math.min(candles * 4, YAHOO_HOURLY_MAX_OUTPUTSIZE);
+        }
+        return yahoo ? Math.min(candles, YAHOO_HOURLY_MAX_OUTPUTSIZE) : candles;
+    }
+
+    private static TickerQuote normalizeIntradayQuote(TickerQuote quote) {
+        if (quote.hasError() || !quote.hasBars()) {
+            return quote;
+        }
+        return withBars(quote, IntradayBarUtil.normalize(quote.bars()));
+    }
+
+    private static TickerQuote aggregateQuoteTo4h(TickerQuote quote) {
+        if (quote.hasError() || !quote.hasBars()) {
+            return quote;
+        }
+        return withBars(quote, IntradayBarUtil.aggregateTo4h(quote.bars()));
+    }
+
+    private static TickerQuote withBars(TickerQuote quote, List<OhlcvBar> bars) {
+        return new TickerQuote(quote.ticker(), bars, quote.longName(), quote.shortName(),
+                quote.name(), quote.currency(), quote.error());
     }
 
     // ── 1d: SSE-Stream von Yahoo/TwelveData ─────────────────────────────────
@@ -165,6 +250,11 @@ public class AnalysisService {
 
         return dataServiceClient.streamQuotes(serviceUrl, tickers, outputsize)
                 .takeWhile(q -> !stopFlag.get())
+                .doOnNext(quote -> {
+                    if (!quote.hasError() && quote.hasBars()) {
+                        writeBackService.triggerAsync(quote.ticker(), source, quote.bars());
+                    }
+                })
                 .map(quote -> analyseQuote(quote, lookback, elliottLookback, source, "1d"))
                 .concatMap(result -> enrichWithMl(result, "1d", includeMl));
     }
@@ -204,14 +294,13 @@ public class AnalysisService {
                 .macdHistogram(result.macdHistogram())
                 .criteriaMet(result.criteriaMet())
                 .source(result.source())
-                .candlePattern(result.candlePattern())
-                .candleStrength(result.candleStrength())
-                .candleGdPeriod(result.candleGdPeriod())
+                .candle(result.candle())
                 .reversalProb(ml.reversalProb())
                 .reversalPct(ml.reversalPct())
                 .mlSignal(ml.signal())
                 .mlConfidence(ml.confidence())
                 .mlAvailable(ml.modelAvailable())
+                .mlExplanation(ml.explanation())
                 .error(result.error())
                 .build();
     }
@@ -308,9 +397,7 @@ public class AnalysisService {
                     .macdHistogram(result.macdOk())
                     .criteriaMet(result.criteriaMet())
                     .source(source)
-                    .candlePattern(result.candle().pattern())
-                    .candleStrength(result.candle().strength())
-                    .candleGdPeriod(result.candle().gdPeriod())
+                    .candle(result.candle())
                     .mlSignal("none")
                     .mlConfidence("low")
                     .mlAvailable(false)

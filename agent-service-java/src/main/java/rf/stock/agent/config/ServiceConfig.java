@@ -11,5 +11,6 @@ public record ServiceConfig(
         String yahooUrl,
         String twelvedataUrl,
         String mlUrl,
-        String dbUrl) {
+        String dbUrl,
+        String vpnControlUrl) {
 }

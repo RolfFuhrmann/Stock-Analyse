@@ -69,18 +69,14 @@ public record StockResult(
 
     String source,
 
-    @JsonProperty("candle_pattern")  String candlePattern,
-    @JsonProperty("candle_strength") int candleStrength,
-
     /**
-     * Welcher gleitende Durchschnitt (20/50/200) den Downtrend für das
-     * erkannte Muster bestätigt hat (siehe BullishCandlePatterns-Kaskade:
-     * bullisch: erst GD200, dann GD50, dann GD20. bearisch: erst GD20, dann
-     * GD50, dann GD200 (siehe CandleGdCascade). null bei "Bullish/Bearish
-     * Abandoned Baby" (nutzt weiterhin die alte ZigZag-basierte
-     * Trendprüfung) und bei fehlendem Muster.
+     * Allgemeingültiges Candlestick-Pattern-Ergebnis (07.09., ersetzt die
+     * vorherigen Einzelfelder candle_pattern/candle_strength/
+     * candle_gd_period) - siehe CandlePatternResult. null-Pattern-Name
+     * bedeutet "kein Muster erkannt" (CandlePatternResult.none()), das
+     * Objekt selbst ist nie null.
      */
-    @JsonProperty("candle_gd_period") Integer candleGdPeriod,
+    @JsonProperty("candle") CandlePatternResult candle,
 
     // ML-Felder
     @JsonProperty("reversal_prob")   Double reversalProb,
@@ -88,6 +84,13 @@ public record StockResult(
     @JsonProperty("ml_signal")       String mlSignal,
     @JsonProperty("ml_confidence")   String mlConfidence,
     @JsonProperty("ml_available")    boolean mlAvailable,
+
+    /**
+     * Erklärung des ML-Werts (21.09.): welche Merkmale ihn nach oben/unten
+     * schieben - Grundlage für "Warum dieser Wert?" im Client. null, wenn das
+     * ML nicht verfügbar war oder der ml-service keine Erklärung lieferte.
+     */
+    @JsonProperty("ml_explanation")  MlExplanation mlExplanation,
 
     String error
 ) {
@@ -105,7 +108,7 @@ public record StockResult(
             .macdHistogram(false)
             .criteriaMet(0)
             .source(source)
-            .candleStrength(0)
+            .candle(CandlePatternResult.none())
             .mlSignal("none")
             .mlConfidence("low")
             .mlAvailable(false)

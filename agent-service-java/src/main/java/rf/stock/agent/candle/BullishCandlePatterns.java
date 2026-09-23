@@ -5,11 +5,12 @@ import java.util.List;
 import org.ta4j.core.Bar;
 import org.ta4j.core.BarSeries;
 import org.ta4j.core.indicators.averages.SMAIndicator;
-import org.ta4j.core.indicators.candles.BullishEngulfingIndicator;
 import org.ta4j.core.indicators.candles.RealBodyIndicator;
 import org.ta4j.core.indicators.helpers.ClosePriceIndicator;
 import org.ta4j.core.num.Num;
 
+import rf.stock.agent.candle.BullishEngulfing.BullishEngulfingPattern;
+import rf.stock.agent.candle.Hammer.HammerPattern;
 import rf.stock.agent.indicator.ElliottAnalysisUtil;
 import rf.stock.agent.model.CandlePatternResult;
 import rf.stock.agent.model.OhlcvBar;
@@ -37,20 +38,24 @@ import rf.stock.agent.model.OhlcvBar;
  * aber OHNE deren eingebaute Trendprüfung, kombiniert mit einer eigenen
  * GD-Kaskade statt ADX.
  *
- * GD-Kaskade (24.08., Rolfs Wunsch): jedes der vier ta4j-basierten Muster
- * wird zuerst mit GD200 auf Downtrend geprüft, dann GD50, dann GD20 - der
- * erste GD, unter dem der Schlusskurs liegt, gilt als Bestätigung (gdPeriod
- * im Ergebnis, Textzusatz z.B. "Hammer (GD200)" im Frontend - eine
- * ursprünglich mitgelieferte Chart-Visualisierung wurde auf Rolfs Wunsch
- * wieder entfernt, "Text reicht"). Bullish Engulfing hat in ta4j gar keine
- * eingebaute Trendprüfung - dort wird ta4js BullishEngulfingIndicator
- * unverändert für die reine Geometrie übernommen und die GD-Kaskade separat
- * davor gehängt.
+ * GD-Kaskade (24.08., Rolfs Wunsch): jedes der verbliebenen ta4j-basierten
+ * Muster (Morning Star, Piercing Line) wird zuerst mit GD200 auf Downtrend
+ * geprüft, dann GD50, dann GD20 - der erste GD, unter dem der Schlusskurs
+ * liegt, gilt als Bestätigung (gdPeriod im Ergebnis).
  *
  * Piercing: ta4j hat zwei Implementierungen (PiercingIndicator vs.
  * PiercingLineIndicator) - hier an PiercingLineIndicator angelehnt (neuer,
  * @since 0.22.3, mit explizit konfigurierbaren Gap-/Penetrations-Schwellen
  * statt fest verdrahtet).
+ *
+ * Hammer (06.09.) und Bullish Engulfing (07.09.) sind komplett eigenständig
+ * gekapselt (candle/Hammer/HammerPattern bzw.
+ * candle/BullishEngulfing/BullishEngulfingPattern) - beide mit eigener
+ * Trendprüfung statt GD-Kaskade (Hammer: ADX/ta4js DownTrendIndicator,
+ * Bullish Engulfing: neues Periodentief/EngulfingNewLowRule), eigenen
+ * Bestätigungsfällen (Hammer: Close > Hammer-Close; Bullish Engulfing:
+ * Close ODER High der 3. Kerze über der Engulfing-Kerze) und
+ * candleDates/confirmed im CandlePatternResult statt gdPeriod.
  */
 
 public class BullishCandlePatterns {
@@ -67,7 +72,7 @@ public class BullishCandlePatterns {
         // Abandoned Baby bleibt Eigenentwicklung (kein ta4j-Äquivalent vorhanden, kein GD).
         CandleUtils candleSticksUtil = new CandleUtils(candleSticksToValidate);
         if (detectAbandonedBaby(candleSticksUtil))
-            return new CandlePatternResult("Bullish Abandoned Baby", 5, null);
+            return new CandlePatternResult("Bullish Abandoned Baby", 5, null, null, false);
 
         BarSeries series = ElliottAnalysisUtil.toBarSeries(candleSticksToValidate);
         int index = series.getEndIndex();
@@ -80,11 +85,14 @@ public class BullishCandlePatterns {
             if (result != null)
                 return result;
         }
-        if (new BullishEngulfingIndicator(series).getValue(index)) {
-            CandlePatternResult result = CandleGdCascade.withGdCascade(closePrice, gdIndicators, index,
-                    "Bullish Engulfing", 3, true);
-            if (result != null)
-                return result;
+        // Bullish Engulfing: komplett gekapselt in candle/BullishEngulfing/
+        // BullishEngulfingPattern (07.09.), analog zu Hammer. Trend hier über
+        // EngulfingNewLowRule (neues Periodentief) statt GD-Kaskade.
+        BullishEngulfingPattern.EngulfingMatch engulfingMatch = new BullishEngulfingPattern(series)
+                .isBullishEngulfing(index);
+        if (engulfingMatch.matched()) {
+            boolean confirmed = engulfingMatch.engulfingCase() == BullishEngulfingPattern.EngulfingCase.ENGULFING_CONFIRMED;
+            return new CandlePatternResult("Bullish Engulfing", 3, null, engulfingMatch.candleDates(), confirmed);
         }
         if (piercingLineGeometry(series, index)) {
             CandlePatternResult result = CandleGdCascade.withGdCascade(closePrice, gdIndicators, index,
@@ -92,11 +100,15 @@ public class BullishCandlePatterns {
             if (result != null)
                 return result;
         }
-        if (hammerGeometry(series, index)) {
-            CandlePatternResult result = CandleGdCascade.withGdCascade(closePrice, gdIndicators, index,
-                    "Hammer", 1, true);
-            if (result != null)
-                return result;
+
+        // Hammer: komplett gekapselt in candle/Hammer/HammerPattern (06.09.).
+        // Trend hier ADX statt GD-Kaskade - siehe HammerPattern-Klassenkommentar.
+        // "confirmed" (07.09.) ersetzt den vorherigen Namens-Suffix "(bestätigt)" -
+        // der Pattern-Name bleibt jetzt für beide Fälle einheitlich "Hammer".
+        HammerPattern.HammerMatch hammerMatch = new HammerPattern(series).isHammer(index);
+        if (hammerMatch.matched()) {
+            boolean confirmed = hammerMatch.hammerCase() == HammerPattern.HammerCase.HAMMER_CONFIRMED;
+            return new CandlePatternResult("Hammer", 1, null, hammerMatch.candleDates(), confirmed);
         }
 
         return CandlePatternResult.none();
@@ -195,36 +207,5 @@ public class BullishCandlePatterns {
 
     private static boolean isInvalidDenominator(Num value) {
         return Num.isNaNOrNull(value) || Double.isNaN(value.doubleValue()) || value.isZero();
-    }
-
-    /**
-     * Geometrie 1:1 nachgebaut aus ta4js HammerIndicator (Default-Schwellwerte:
-     * bodyToBottomWickRatio=2.0, bodyToUpperWickRatio=1.0) - OHNE die dort fest
-     * eingebaute Trendprüfung (siehe Klassenkommentar).
-     */
-    private static boolean hammerGeometry(BarSeries series, int index) {
-        RealBodyIndicator body = new RealBodyIndicator(series);
-
-        Bar bar = series.getBar(index);
-        Num openPrice = bar.getOpenPrice();
-        Num closePrice = bar.getClosePrice();
-        Num lowPrice = bar.getLowPrice();
-        Num highPrice = bar.getHighPrice();
-
-        Num bodyHeight = body.getValue(index).abs();
-        if (bodyHeight.isZero()) {
-            return false;
-        }
-
-        Num upperBodyBoundary = openPrice.max(closePrice);
-        Num bottomBodyBoundary = openPrice.min(closePrice);
-        Num bottomWickHeight = bottomBodyBoundary.minus(lowPrice);
-        Num upperWickHeight = highPrice.minus(upperBodyBoundary);
-
-        Num bodyToBottomWickRatio = series.numFactory().numOf(2.0);
-        Num bodyToUpperWickRatio = series.numFactory().numOf(1.0);
-
-        return bottomWickHeight.dividedBy(bodyHeight).isGreaterThan(bodyToBottomWickRatio)
-                && upperWickHeight.dividedBy(bodyHeight).isLessThanOrEqual(bodyToUpperWickRatio);
     }
 }

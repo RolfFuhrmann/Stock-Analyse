@@ -26,6 +26,8 @@ services:
 
       # ERGÄNZUNG: Erlaubt dem Docker-Netzwerk (172.x.x.x) den Zugriff durch die VPN-Firewall
       - FIREWALL_OUTBOUND_SUBNETS=${FIREWALL_OUTBOUND_SUBNETS}
+    volumes:
+      - ./gluetun-auth/config.toml:/gluetun/auth/config.toml:ro
     ports:
       - "8011:8011"
     networks:
@@ -34,26 +36,11 @@ services:
           - yahoo-service
     restart: unless-stopped
 
-  # ── Agent Service (:8010) ────────────────────────────────────
-  agent-service:
-    build:
-      context: ./agent-service
-      dockerfile: Dockerfile
-    container_name: stock_agent
-    restart: unless-stopped
-    ports:
-      - "8010:8010"
-    environment:
-      - YAHOO_SERVICE_URL=http://yahoo-service:8011
-      - TWELVEDATA_SERVICE_URL=http://twelvedata-service:8012
-      - DB_SERVICE_URL=http://db-service:8013
-      - ML_SERVICE_URL=http://ml-service:8015
-    depends_on:
-      - vpn
-      - twelvedata-service
-      - ml-service
-    networks:
-      - stock-net
+  # ── Agent Service (Python, :8010) ────────────────────────────
+  # Am 09.09. entfernt - vollständig durch agent-service-java (:8016)
+  # ersetzt. Client zeigte schon vorher ausschließlich auf 8016, kein
+  # anderer Service hatte depends_on darauf. Quellcode-Ordner ./agent-service
+  # ggf. separat archivieren/löschen, hier nur der Compose-Eintrag entfernt.
 
   # ── Agent Service Java (:8016) ──────────────────────────────
   agent-service-java:
@@ -71,6 +58,9 @@ services:
       - DB_SERVICE_URL=http://db-service:8013
       - ML_SERVICE_URL=http://ml-service:8015
       - JAVA_TOOL_OPTIONS=-agentlib:jdwp=transport=dt_socket,server=y,suspend=n,address=*:5005
+      # Explizit gesetzt, damit Log-Zeitstempel der Host-Zeit entsprechen
+      # (Dockerfile installiert tzdata, sonst greift TZ nicht - Alpine-Image)
+      - TZ=Europe/Berlin
     depends_on:
       - vpn
       - twelvedata-service
@@ -86,6 +76,10 @@ services:
     container_name: stock_yahoo
     restart: unless-stopped
     network_mode: "container:vpn"
+    environment:
+      # Explizit gesetzt, damit Log-Zeitstempel der Host-Zeit entsprechen
+      # (Dockerfile installiert tzdata, sonst greift TZ nicht)
+      - TZ=Europe/Berlin
     depends_on:
       - vpn
 
@@ -100,6 +94,10 @@ services:
       - "8012:8012"
     env_file:
       - ./twelvedata-service/.env
+    environment:
+      # Explizit gesetzt, damit Log-Zeitstempel der Host-Zeit entsprechen
+      # (Dockerfile installiert tzdata, sonst greift TZ nicht)
+      - TZ=Europe/Berlin
     networks:
       - stock-net
 
@@ -142,6 +140,9 @@ services:
       - DB_NAME=stock_data
       - DB_USER=${MYSQL_USER}
       - DB_PASSWORD=${MYSQL_PASSWORD}
+      # Explizit gesetzt, damit Log-Zeitstempel der Host-Zeit entsprechen
+      # (Dockerfile installiert tzdata, sonst greift TZ nicht - Alpine-Image)
+      - TZ=Europe/Berlin
     depends_on:
       mysql-db:
         condition: service_healthy
@@ -169,6 +170,9 @@ services:
       # 5 Jahre Tagesdaten, 12 Monate Stundendaten
       - INITIAL_DAILY_DAYS=1825
       - INITIAL_HOURLY_HOURS=8760
+      # Explizit gesetzt, damit Log-Zeitstempel & Cron-Zeit der Host-Zeit
+      # entsprechen (Dockerfile installiert tzdata, sonst greift TZ nicht)
+      - TZ=Europe/Berlin
     depends_on:
       - db-service
       - vpn

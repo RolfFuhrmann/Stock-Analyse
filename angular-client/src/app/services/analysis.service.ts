@@ -1,6 +1,7 @@
-import { Injectable } from '@angular/core';
+import { Injectable, inject } from '@angular/core';
 import { Observable } from 'rxjs';
 import { DataSource, Interval, StockResult } from '../models/stock.models';
+import { WakeLockService } from './wake-lock.service';
 
 /**
  * AnalysisService
@@ -13,10 +14,14 @@ import { DataSource, Interval, StockResult } from '../models/stock.models';
  *   stopStream() sendet POST /analyze/stop an den Agent,
  *   der daraufhin auch den laufenden Data-Service-Abruf abbricht.
  *   Zusätzlich wird der lokale Reader abgebrochen (AbortController).
+ *
+ * Ruhezustand: Solange der Stream läuft, hält WakeLockService den Rechner
+ * wach (sonst friert Docker Desktop im Ruhezustand die Analyse ein).
  */
 @Injectable({ providedIn: 'root' })
 export class AnalysisService {
   private readonly agentUrl = 'http://localhost:8016';
+  private readonly wakeLock = inject(WakeLockService);
 
   /** Aktiver AbortController – ermöglicht sofortigen lokalen Abbruch */
   private _abortController: AbortController | null = null;
@@ -31,6 +36,9 @@ export class AnalysisService {
     lookbackDays = 90
   ): Observable<StockResult> {
     return new Observable<StockResult>((observer) => {
+      // Ruhezustand verhindern, bis der Stream endet (Teardown weiter unten)
+      this.wakeLock.acquire();
+
       // Neue Session für diese Analyse
       const sessionId = crypto.randomUUID();
       this._sessionId = sessionId;
@@ -105,6 +113,9 @@ export class AnalysisService {
             observer.complete();
           }
         });
+
+      // Läuft bei complete, error und unsubscribe (Stop-Button) gleichermaßen
+      return () => this.wakeLock.release();
     });
   }
 

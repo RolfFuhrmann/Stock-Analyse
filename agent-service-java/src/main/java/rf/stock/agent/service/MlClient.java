@@ -3,13 +3,16 @@ package rf.stock.agent.service;
 import com.fasterxml.jackson.annotation.JsonIgnoreProperties;
 import com.fasterxml.jackson.annotation.JsonProperty;
 import org.springframework.beans.factory.annotation.Value;
+import org.springframework.core.ParameterizedTypeReference;
 import org.springframework.stereotype.Component;
 import org.springframework.web.reactive.function.client.WebClient;
 import reactor.core.publisher.Mono;
 import rf.stock.agent.config.ServiceConfig;
+import rf.stock.agent.model.MlExplanation;
 
 import java.time.Duration;
 import java.util.Map;
+
 
 /**
  * Client für den ML-Service (Reversal-Wahrscheinlichkeit).
@@ -34,7 +37,7 @@ public class MlClient {
 
     /** Standard-Antwort bei Fehlern oder Timeout – ML darf den Analyse-Stream nie blockieren. */
     public static MlSignal defaults() {
-        return new MlSignal(null, null, "none", "low", false);
+        return new MlSignal(null, null, "none", "low", false, null);
     }
 
     /**
@@ -57,13 +60,31 @@ public class MlClient {
             .onErrorResume(e -> Mono.just(defaults()));
     }
 
+    /**
+     * Modell-Info für die Einstellungen im Client (GET /model/info des ml-service,
+     * unverändert durchgereicht). Bei Fehler/Timeout ein Platzhalter statt eines
+     * HTTP-Fehlers - der Client zeigt dann "nicht verfügbar".
+     */
+    public Mono<Map<String, Object>> fetchModelInfo() {
+        return webClient.get()
+            .uri(mlUrl + "/model/info")
+            .retrieve()
+            .bodyToMono(new ParameterizedTypeReference<Map<String, Object>>() {})
+            .timeout(timeout)
+            .onErrorResume(e -> Mono.just(Map.<String, Object>of(
+                "model_ready", false,
+                "error", "ML-Service nicht erreichbar"
+            )));
+    }
+
     private static MlSignal toSignal(MlResponse r) {
         return new MlSignal(
             r.reversalProb(),
             r.reversalPct(),
             r.signal() != null ? r.signal() : "none",
             r.confidence() != null ? r.confidence() : "low",
-            r.modelAvailable() != null ? r.modelAvailable() : true
+            r.modelAvailable() != null ? r.modelAvailable() : true,
+            r.explanation()
         );
     }
 
@@ -73,7 +94,8 @@ public class MlClient {
         Double reversalPct,
         String signal,
         String confidence,
-        boolean modelAvailable
+        boolean modelAvailable,
+        MlExplanation explanation
     ) {}
 
     /** Rohe Antwort vom ML-Service (Python, snake_case). */
@@ -83,6 +105,7 @@ public class MlClient {
         @JsonProperty("reversal_pct")    Double reversalPct,
         String signal,
         String confidence,
-        @JsonProperty("model_available") Boolean modelAvailable
+        @JsonProperty("model_available") Boolean modelAvailable,
+        MlExplanation explanation
     ) {}
 }
