@@ -490,8 +490,6 @@ const RESULT_SIGNAL_TEXT: Record<StockResult['ml_signal'], string> = {
       }
 
       /* ML-Signal Badge */
-      .ml-clickable { cursor: pointer; }
-      .ml-clickable:hover { filter: brightness(0.95); }
       .ml-badge {
         display: inline-flex;
         align-items: center;
@@ -504,6 +502,11 @@ const RESULT_SIGNAL_TEXT: Record<StockResult['ml_signal'], string> = {
         cursor: default;
         white-space: nowrap;
       }
+      /* Nach .ml-badge UND mit zusammengesetztem Selektor, damit "cursor: pointer"
+         nicht von der cursor-Regel oben überschrieben wird (gleiche Spezifität,
+         spätere Position hätte sonst gewonnen). */
+      .ml-badge.ml-clickable { cursor: pointer; }
+      .ml-badge.ml-clickable:hover { filter: brightness(0.95); }
       .ml-none {
         background: #f3f4f6;
         color: #9ca3af;
