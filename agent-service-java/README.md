@@ -1,17 +1,14 @@
 # agent-service-java
 
-Java/Spring-Boot-Port des ursprünglichen Python `agent-service`. Läuft als
-eigener Service (Port **8016**) im docker-compose-Stack, API-Vertrag
-(Request/Response-JSON) ist **identisch** zum Python-Service.
+Der Agent Service der Stock-Platform (Java/Spring Boot). Der frühere
+Python-`agent-service` ist entfernt worden - dies ist seither der einzige
+Agent, Port **8016**.
 
-## Port & Unterschiede
+## Eckdaten
 
-|                | Python `agent-service` | `agent-service-java`     |
-| -------------- | ----------------------- | ------------------------ |
-| Port           | 8010                    | **8016**                 |
-| Framework      | FastAPI + asyncio       | Spring Boot 4.1 + WebFlux (reaktiv) |
-| Java-Version   | –                       | 25                        |
-| Container-Name | `stock_agent`           | `stock_agent_java`        |
+| Port           | Framework                    | Java-Version | Container-Name    |
+| -------------- | ------------------------------ | ------------- | -------------------- |
+| **8016**       | Spring Boot 4.1 + WebFlux (reaktiv) | 25            | `stock_agent_java`   |
 
 ## Struktur
 
@@ -37,8 +34,8 @@ src/main/java/rf/stock/agent/
 │   ├── IntradayBarUtil.java         Zeitstempel normalisieren + 1h → 4h aggregieren
 │   └── TradingDayUtil.java          Handelstage-Arithmetik (Write-back-Cutoff)
 ├── indicator/
-│   ├── BullishIndicator.java        Elliott A-B-C + MACD<0 + Stoch<20
-│   └── BearishIndicator.java        Elliott 1-2-3 + MACD>0 + Stoch>80
+│   ├── BullishIndicator.java        Elliott A-B-C + MACD<0 + Stoch<20 (ta4j 0.25.0)
+│   └── BearishIndicator.java        Elliott 1-2-3 + MACD>0 + Stoch>80 (ta4j 0.25.0)
 ├── candle/
 │   ├── CandleUtils.java             Kerzen-Hilfsfunktionen (negative Indizes)
 │   ├── BullishCandlePatterns.java   5 Muster: Abandoned Baby, Morning Star,
@@ -121,17 +118,12 @@ docker run -p 8016:8016 \
   agent-service-java
 ```
 
-## Bekannte Unterschiede zum Python-Service (bewusst vereinfacht)
+## Hinweise zur Ticker-Namensermittlung
 
-- **Ticker-Name-Lookup über yfinance** (`_get_ticker_name` in Python) wurde
-  **nicht** portiert. Yahoo/TwelveData liefern den Namen bereits im
-  SSE-Quote-Payload (`longName`/`shortName`) – Java nutzt nur diesen Wert.
+- Yahoo/TwelveData liefern den Anzeigenamen bereits im SSE-Quote-Payload
+  (`longName`/`shortName`) - ein zusätzlicher Lookup findet nicht statt.
   Falls ein Service den Namen nicht mitliefert, bleibt `name` null
   (Angular zeigt dann nur den Ticker an, kein Blocker).
-- **Candlestick-Logik 1:1 portiert** – inklusive der "lockeren" (relaxed)
-  Toleranzen im Bearish Abandoned Baby, die im Python-Original ebenfalls
-  keinen strikten Trend-Check mehr hatten. Das ist also der richtige
-  Ansatzpunkt, wenn du die Candle-Muster jetzt überarbeiten willst.
 
 ## Bekannte offene Punkte
 

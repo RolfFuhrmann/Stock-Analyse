@@ -54,11 +54,7 @@ interface BarRow {
         <span class="score-label">{{ data.signalLabel }}</span>
       </div>
 
-      <p class="lead">
-        Das Modell schätzt, wie stark ein <strong>Kursanstieg von mehr als 3 %</strong>
-        innerhalb der nächsten 5 {{ candles() }} zu erwarten ist. Der Wert ist ein
-        Modellwert, keine garantierte Wahrscheinlichkeit.
-      </p>
+      <p class="lead" [innerHTML]="lead()"></p>
 
       @if (context(); as ctx) {
         <div class="context">{{ ctx }}</div>
@@ -151,13 +147,43 @@ export class MlExplanationModalComponent {
   readonly score   = computed(() => formatNumber(this.data.reversalPct, 1));
   readonly base    = computed(() => formatNumber(this.data.explanation.base_pct, 1));
 
+  /**
+   * Beschreibung dessen, was der Modellwert bedeutet (29.09.: Reversal-Label
+   * mit Downtrend-Vorbedingung statt reinem Anstiegs-Label, siehe
+   * ml-service/app/features/engineer.py compute_labels()). Werte kommen
+   * dynamisch vom Modell selbst (nicht hartcodiert), damit Text und
+   * tatsächliches Modellverhalten nie auseinanderlaufen. Modelle vor dem
+   * 29.09. haben downtrend_threshold_pct/downtrend_lookback noch nicht -
+   * dann generische Formulierung ohne die Downtrend-Vorbedingung.
+   */
+  readonly lead = computed(() => {
+    const e = this.data.explanation;
+    const horizon    = e.forecast_horizon ?? 5;
+    const threshold  = formatNumber(e.reversal_threshold_pct ?? 3, 1);
+    const candleWord = this.candles();
+
+    if (e.downtrend_threshold_pct != null && e.downtrend_lookback != null) {
+      const dtThreshold = formatNumber(e.downtrend_threshold_pct, 1);
+      const dtLookback  = e.downtrend_lookback;
+      return `Das Modell schätzt, wie wahrscheinlich es ist, dass sich ein bestehender ` +
+             `<strong>Abwärtstrend</strong> (Kurs mindestens ${dtThreshold} % unter dem Hoch der letzten ` +
+             `${dtLookback} ${candleWord}) innerhalb der nächsten ${horizon} ${candleWord} umkehrt: der Kurs ` +
+             `müsste dafür um mehr als <strong>${threshold} %</strong> steigen, ohne vorher ein neues Tief zu ` +
+             `erzeugen. Der Wert ist ein Modellwert, keine garantierte Wahrscheinlichkeit.`;
+    }
+    return `Das Modell schätzt, wie stark ein <strong>Kursanstieg von mehr als ${threshold} %</strong> ` +
+           `innerhalb der nächsten ${horizon} ${candleWord} zu erwarten ist. Der Wert ist ein Modellwert, ` +
+           `keine garantierte Wahrscheinlichkeit.`;
+  });
+
   /** Einordnung im Vergleich zum Training für diesen Zeitrahmen (nur bei Modellen ab 21.09.). */
   readonly context = computed(() => {
     const e = this.data.explanation;
     if (e.typical_score_pct == null || e.actual_rate_pct == null) return null;
+    const eventWord = e.downtrend_threshold_pct != null ? 'einer solchen Umkehr' : 'einem Anstieg über 3 %';
     return `Zum Einordnen: Im Training lag der Modellwert für ${candleName(e.interval)} im Schnitt bei ` +
-           `${formatNumber(e.typical_score_pct)} % – tatsächlich gab es in ${formatNumber(e.actual_rate_pct)} % ` +
-           `der Fälle einen Anstieg über 3 %. Werte sind daher nur innerhalb desselben Zeitrahmens vergleichbar.`;
+           `${formatNumber(e.typical_score_pct)} % – tatsächlich kam es in ${formatNumber(e.actual_rate_pct)} % ` +
+           `der Fälle zu ${eventWord}. Werte sind daher nur innerhalb desselben Zeitrahmens vergleichbar.`;
   });
 
   readonly rows = computed<BarRow[]>(() => {

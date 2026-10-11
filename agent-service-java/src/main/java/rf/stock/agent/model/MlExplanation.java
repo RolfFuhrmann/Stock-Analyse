@@ -22,6 +22,10 @@ import com.fasterxml.jackson.annotation.JsonProperty;
  * @param otherCount       Anzahl dieser übrigen Merkmale
  * @param typicalScorePct  Typischer Modellwert für diesen Zeitrahmen (Mittel aus dem Training), null bei älteren Modellen
  * @param actualRatePct    Anteil tatsächlicher Anstiege für diesen Zeitrahmen im Training, null bei älteren Modellen
+ * @param forecastHorizon        Vorhersage-Horizont in Kerzen (29.09., Reversal-Label statt reinem Anstiegs-Label)
+ * @param reversalThresholdPct   Mindest-Anstieg in %, um als Umkehr zu gelten
+ * @param downtrendThresholdPct  Downtrend-Vorbedingung: Mindest-Abstand zum Referenz-Hoch in %, null bei Modellen vor dem 29.09.
+ * @param downtrendLookback      Anzahl Kerzen für das Referenz-Hoch der Downtrend-Vorbedingung, null bei Modellen vor dem 29.09.
  */
 @JsonIgnoreProperties(ignoreUnknown = true)
 @JsonInclude(JsonInclude.Include.ALWAYS)
@@ -33,7 +37,11 @@ public record MlExplanation(
         @JsonProperty("other_pp")           Double otherPp,
         @JsonProperty("other_count")        Integer otherCount,
         @JsonProperty("typical_score_pct")  Double typicalScorePct,
-        @JsonProperty("actual_rate_pct")    Double actualRatePct) {
+        @JsonProperty("actual_rate_pct")    Double actualRatePct,
+        @JsonProperty("forecast_horizon")        Integer forecastHorizon,
+        @JsonProperty("reversal_threshold_pct")  Double reversalThresholdPct,
+        @JsonProperty("downtrend_threshold_pct") Double downtrendThresholdPct,
+        @JsonProperty("downtrend_lookback")      Integer downtrendLookback) {
 
     /**
      * Ein Merkmal mit seinem Einfluss.

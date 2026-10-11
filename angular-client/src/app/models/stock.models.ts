@@ -97,17 +97,24 @@ export interface MlExplanation {
   typical_score_pct: number | null;
   /** Anteil tatsächlicher Anstiege für diesen Zeitrahmen im Training (null bei älteren Modellen) */
   actual_rate_pct:   number | null;
+  /** Vorhersage-Horizont in Kerzen (29.09., Reversal-Label statt reinem Anstiegs-Label) */
+  forecast_horizon?:        number | null;
+  /** Mindest-Anstieg in %, um als Umkehr zu gelten */
+  reversal_threshold_pct?:  number | null;
+  /** Downtrend-Vorbedingung: Mindest-Abstand zum Referenz-Hoch in %, null bei Modellen vor dem 29.09. */
+  downtrend_threshold_pct?: number | null;
+  /** Anzahl Kerzen für das Referenz-Hoch der Downtrend-Vorbedingung, null bei Modellen vor dem 29.09. */
+  downtrend_lookback?:      number | null;
 }
 
-/** Kennzahlen je Zeitrahmen aus dem Training (nur bei Modellen ab 21.09.). */
-export interface MlIntervalBreakdown {
+/** Zusammensetzung von Training/Test EINES Modells (29.09., ersetzt MlIntervalBreakdown -
+ *  seit der Umstellung auf drei eigenständige Modelle pro Zeitrahmen ist das kein
+ *  Breakdown über mehrere Zeitrahmen mehr, sondern schon die Werte des einen Modells). */
+export interface MlModelSummary {
   train_samples:     number;
   test_samples:      number;
   positive_rate_pct: number | null;
   mean_score_pct:    number | null;
-  test_roc_auc?:     number;
-  test_precision?:   number;
-  test_recall?:      number;
 }
 
 /** Ein Wahrscheinlichkeits-Bin der Kalibrierung (Testmenge). */
@@ -119,8 +126,11 @@ export interface MlCalibrationBin {
   actual_pct:    number;
 }
 
-/** Antwort von GET /ml/info im agent-service-java (durchgereicht vom ml-service). */
-export interface MlModelInfo {
+/** Zeitrahmen, für die es ein eigenständiges KI-Modell gibt (29.09.). */
+export type MlInterval = '1d' | '4h' | '1h';
+
+/** Modell-Info EINES Zeitrahmens - Antwortform von GET /ml/info je Interval-Schlüssel. */
+export interface MlModelInfoSingle {
   model_ready:              boolean;
   error?:                   string;
   training_active?:         boolean;
@@ -136,14 +146,21 @@ export interface MlModelInfo {
   positive_rate_pct?:       number;
   forecast_horizon?:        number;
   reversal_threshold_pct?:  number;
-  intervals_trained?:       string[];
   scale_pos_weight?:        number | null;
   metrics?:                 { precision?: number; recall?: number; roc_auc?: number };
   thresholds?:              { weak: number; moderate: number; strong: number };
   feature_importance?:      { feature: string; label: string; importance: number }[];
-  breakdown?:               Record<string, MlIntervalBreakdown> | null;
+  summary?:                 MlModelSummary | null;
   calibration?:             MlCalibrationBin[] | null;
 }
+
+/**
+ * Antwort von GET /ml/info im agent-service-java (durchgereicht vom ml-service).
+ * Seit 29.09.: drei eigenständige Modelle statt einem gemeinsamen mit
+ * interval_code-Feature - daher jetzt je Zeitrahmen ein eigener Eintrag statt
+ * einer flachen Struktur mit interval-Breakdown darin.
+ */
+export type MlModelInfo = Record<MlInterval, MlModelInfoSingle>;
 
 /**
  * Allgemeingültiges Candlestick-Pattern-Ergebnis, für alle Muster nutzbar

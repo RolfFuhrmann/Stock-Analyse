@@ -191,10 +191,6 @@ services:
       - "8015:8015"
     environment:
       - DB_SERVICE_URL=http://db-service:8013
-      # Forecast-Horizont in Tagen (Umkehr in den nächsten N Tagen)
-      - FORECAST_HORIZON=5
-      # Mindest-Preisänderung % für eine Umkehr
-      - REVERSAL_THRESHOLD_PCT=3.0
       # Wöchentliches Retraining: Sonntag 02:00 Uhr
       - RETRAIN_WEEKDAY=6
       - RETRAIN_HOUR=2

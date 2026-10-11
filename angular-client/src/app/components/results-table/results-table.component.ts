@@ -8,7 +8,7 @@ import { MatTooltipModule } from '@angular/material/tooltip';
 import { ElliottChartModalComponent } from '../elliott-chart-modal/elliott-chart-modal.component';
 import { MlExplanationModalComponent } from '../ml-explanation-modal/ml-explanation-modal.component';
 import { ElliottChartThumbnailComponent } from '../elliott-chart-thumbnail/elliott-chart-thumbnail.component';
-import { StockResult } from '../../models/stock.models';
+import { StockResult, INTERVAL_LOOKBACK, INTERVAL_LABELS } from '../../models/stock.models';
 import { currencySymbol } from '../../shared/currency.util';
 
 type SortColumn =
@@ -102,7 +102,13 @@ const RESULT_SIGNAL_TEXT: Record<StockResult['ml_signal'], string> = {
 
           <!-- Trend -->
           <ng-container matColumnDef="trend">
-            <th mat-header-cell *matHeaderCellDef class="col-right sortable-header" (click)="sortBy('trend')">
+            <th
+              mat-header-cell
+              *matHeaderCellDef
+              class="col-right sortable-header"
+              (click)="sortBy('trend')"
+              [matTooltip]="trendHeaderTooltip()"
+            >
               Trend <mat-icon class="sort-icon">{{ sortIcon('trend') }}</mat-icon>
             </th>
             <td
@@ -111,6 +117,7 @@ const RESULT_SIGNAL_TEXT: Record<StockResult['ml_signal'], string> = {
               class="col-right numeric"
               [class.positive]="(row.trend_pct ?? 0) >= 0"
               [class.negative]="(row.trend_pct ?? 0) < 0"
+              [matTooltip]="trendTooltip(row)"
             >
               {{ row.trend_pct != null ? (row.trend_pct >= 0 ? '+' : '') + row.trend_pct.toFixed(1) + '%' : '–' }}
             </td>
@@ -654,6 +661,29 @@ export class ResultsTableComponent {
   sortIcon(col: SortColumn): string {
     if (this.sortColumn() !== col || !this.sortDir()) return 'unfold_more';
     return this.sortDir() === 'asc' ? 'arrow_upward' : 'arrow_downward';
+  }
+
+  /**
+   * Hint für die Trend-Spalte: erklärt, über wie viele Kerzen des jeweiligen
+   * Zeitrahmens sich der %-Wert berechnet (siehe AnalysisService.analyseQuote()
+   * im agent-service-java - trendPct = Kursveränderung vom Schlusskurs vor
+   * `lookback` Kerzen bis zum aktuellen Schlusskurs). Pro Zeile, da row.interval
+   * zuverlässig vorhanden ist (auch wenn im Normalbetrieb per Radio-Filter immer
+   * nur ein Zeitrahmen gleichzeitig abgerufen wird).
+   */
+  trendTooltip(row: StockResult): string {
+    const interval = row.interval ?? '1d';
+    const candles = INTERVAL_LOOKBACK[interval];
+    const label = INTERVAL_LABELS[interval];
+    return `Kursveränderung über die letzten ${candles} Kerzen (${label}-Abruf)`;
+  }
+
+  /** Spaltenkopf-Hint: nimmt den Zeitrahmen der ersten angezeigten Zeile (im Normalbetrieb immer einheitlich). */
+  trendHeaderTooltip(): string {
+    const interval = this.results()[0]?.interval ?? '1d';
+    const candles = INTERVAL_LOOKBACK[interval];
+    const label = INTERVAL_LABELS[interval];
+    return `Kursveränderung über die letzten ${candles} Kerzen des eingestellten Abrufs (aktuell ${label})`;
   }
 
   /** Re-Export fürs Template (Angular-Templates rufen keine importierten Funktionen direkt auf). */

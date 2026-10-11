@@ -30,7 +30,9 @@ public class BearishIndicator {
     private static final int MACD_FAST = 12;
     private static final int MACD_SLOW = 26;
     private static final int MACD_SIGNAL = 9;
-    private static final int STOCH_K = 14;
+    // 01.10. von 14 auf 10 umgestellt, einheitlich mit ml-service/engineer.py
+    // und BullishIndicator
+    private static final int STOCH_K = 10;
     private static final int STOCH_D = 3;
 
     public static IndicatorResult evaluate(List<OhlcvBar> bars, int elliottLookback) {

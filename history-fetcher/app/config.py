@@ -19,8 +19,13 @@ class Settings(BaseSettings):
     initial_hourly_hours: int = 8760
     # Tageskerzen für den täglichen Update-Lauf (10 Tage Puffer)
     update_daily_days:   int = 10
-    # 4h-Kerzen: 6 Monate initiale Tiefe (6 × 30 × 6 Kerzen/Tag ≈ 1080)
-    initial_4h_candles:  int = 1080
+    # 4h-Kerzen: initiale Tiefe (28.09. von 1080 auf 5000 angehoben, um die
+    # volle mögliche Historie in einem Lauf zu holen. TwelveData: bis zu
+    # TWELVEDATA_MAX_OUTPUTSIZE=5000 nativ abrufbar. Yahoo: wird durch die
+    # 1h-Aggregation ohnehin auf die reale ~730-Tage-Grenze gedeckelt
+    # (siehe data_client.fetch_4h_bars), 5000 ist hier nur die obere Schranke
+    # der Formel candles*4+40 und wird praktisch nie erreicht)
+    initial_4h_candles:  int = 5000
     # 4h-Kerzen: Update-Puffer (7 Tage × 6 Kerzen/Tag)
     update_4h_candles:   int = 42
     # 1h-Kerzen: Update-Puffer in Stunden (24h ≈ 1 Handelstag Reserve)

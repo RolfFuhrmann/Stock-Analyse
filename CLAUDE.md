@@ -246,15 +246,25 @@ zusätzlich, ob das geladene Modell kalibriert ist (`calibrated`); bei `false`
 (Modell vor dem 21.09. trainiert) erscheint ein Hinweis, dass ein neues
 Training nötig ist, damit der Modellwert eine belastbare Größenordnung hat.
 
-**KI-Signal erklären (21.09.):** Klick auf den KI-Wert in der Ergebnistabelle öffnet
-`MlExplanationModalComponent`: Ausgangswert des Modells, die 8 wichtigsten Merkmale als
-Balken (rechts = erhöht den Wert, links = senkt ihn, jeweils mit aktuellem Wert und
-Prozentpunkten), Rest zusammengefasst, Endwert; dazu ein Einordnungssatz (typischer Wert
-und tatsächlicher Anstiegsanteil je Zeitrahmen). Einstellungen → "KI-Modell"
-(`MlModelInfoComponent` über `MlService` → `GET /ml/info`): Lernziel, Trainingsstand,
-Metriken, Zusammensetzung von Training/Test je Zeitrahmen (Warnhinweis, wenn ein Zeitrahmen
-nicht getestet wurde), Kalibrierung und wichtigste Merkmale. Der Spaltentooltip nennt
-jetzt "5 Kerzen" statt "5 Tage".
+**KI-Signal erklären (21.09., Lead-Text seit 05.10. dynamisch):** Klick auf den KI-Wert
+in der Ergebnistabelle öffnet `MlExplanationModalComponent`: Ausgangswert des Modells,
+die 8 wichtigsten Merkmale als Balken (rechts = erhöht den Wert, links = senkt ihn,
+jeweils mit aktuellem Wert und Prozentpunkten), Rest zusammengefasst, Endwert; dazu ein
+Einordnungssatz (typischer Wert und tatsächlicher Anstiegsanteil je Zeitrahmen). Der
+einleitende Erklärtext (`lead()`, computed signal) ist seit 05.10. **nicht mehr
+hartcodiert** ("Anstieg > 3 % in 5 Kerzen"), sondern baut sich aus den neuen
+`explanation`-Feldern des ml-service auf (`forecast_horizon`, `reversal_threshold_pct`,
+`downtrend_threshold_pct`, `downtrend_lookback` - siehe 3.8): sind die beiden
+Downtrend-Felder vorhanden (Modell nach der Reversal-Label-Umstellung trainiert), wird
+der volle Umkehr-Text erzeugt ("Abwärtstrend ... mindestens X % unter dem Hoch der
+letzten N Kerzen ... Anstieg > Y % ohne neues Tief"); fehlen sie (altes, noch nicht
+neu trainiertes Modell), fällt der Text auf die einfache
+"Anstieg > X % in N Kerzen"-Formulierung zurück. Einstellungen → "KI-Modell"
+(`MlModelInfoComponent` über `MlService` → `GET /ml/info`, pro Zeitrahmen über
+`MatButtonToggleGroup` 1d/4h/1h umschaltbar - Radio-Verhalten, nur der ausgewählte
+Zeitrahmen wird angezeigt): Lernziel, Trainingsstand, Metriken, `summary` je Zeitrahmen
+(ersetzt das frühere `breakdown`), Kalibrierung und wichtigste Merkmale. Der
+Spaltentooltip nennt "5 Kerzen" statt "5 Tage".
 
 ### 3.2 Agent Service (`agent-service/`)
 
@@ -310,19 +320,16 @@ data: {"message": "Analyse abgeschlossen"}
 | Container    | `stock_agent_java`                          |
 | Status       | **Produktiv über docker-compose** (Stand 07/2026) |
 
-Java/Spring-Boot-Port des Python `agent-service`. API-Vertrag (Request/Response-JSON)
-ist identisch zum Python-Service. **TODO (Claude):** Klären und hier dokumentieren,
-ob der Python-`agent-service` inzwischen abgeschaltet/entfernt wurde oder weiterhin
-parallel läuft – Stand dieser Doku ist unklar, da das im Rahmen der Session nicht
-final geklärt wurde.
+**Der Python-`agent-service` (früher Port 8010) ist entfernt (Stand 24.09.)
+- `agent-service-java` ist seither der einzige Agent.**
 
 **Elliott-Wave-Erkennung läuft seit 07/2026 über [ta4j](https://github.com/ta4j/ta4j)**,
 nicht mehr über eine handgestrickte Implementierung. Läuft seit 31.07. über
 `ElliottWaveAnalysisRunner` (0.22.4+) statt der nackten `ElliottWaveFacade`.
-**`ta4j-core` ist seit 01.08. auf `0.22.7` angehoben und produktiv verifiziert**
-(mehrere erfolgreiche DAX-/Dow-Jones-Komplettläufe seit 01.–03.08., inkl.
-`ElliottLogicProfile.HIERARCHICAL_SWING`) – der frühere offene Punkt "Build nach
-Upgrade nicht verifiziert" ist damit erledigt.
+**`ta4j-core` ist seit 01.08. auf `0.22.7`, seit 24.09. auf `0.25.0` angehoben**
+(mehrere erfolgreiche DAX-/Dow-Jones-Komplettläufe seit 01.–03.08. mit 0.22.7,
+`ElliottLogicProfile.HIERARCHICAL_SWING`; das Upgrade auf 0.25.0 hat Rolf lokal
+mit `mvn compile` verifiziert).
 
 **Zentrale Hilfsklasse: `ElliottAnalysisSupport` → `ElliottAnalysisUtil`
 (01.08., auf Rolfs Wunsch umbenannt).** Vorher direkte Querverweise
@@ -797,9 +804,7 @@ liefert (ältere Modelle/Fehler). Neuer Endpunkt `GET /ml/info` (`MlController`)
   `fetched_at` bleibt beim Upsert unverändert (Erst-Schreibzeit).
 - **Yahoo-Stundendaten-Tiefe:** `YAHOO_HOURLY_MAX_OUTPUTSIZE = 600` ist aus dem
   history-fetcher übernommen, nicht selbst gegen Yahoo ausgetestet.
-- **Klären: Python-`agent-service` (Port 8010) noch aktiv oder durch
-  `agent-service-java` ersetzt?**
-- **`stock-data-db-access`: README/Doku für Java-25-Stand ergänzen**
+- ~~Klären: Python-`agent-service` noch aktiv?~~ Erledigt (24.09.): entfernt, `agent-service-java` ist der einzige Agent.
 
 
 
@@ -818,6 +823,22 @@ liefert (ältere Modelle/Fehler). Neuer Endpunkt `GET /ml/info` (`MlController`)
 - Externe IP = anonyme Proton VPN IP (Niederlande)
 - `curl_cffi` imitiert Chrome-TLS-Fingerabdruck
 - Zufälliger Delay zwischen Tickern: 2.5–4.5 Sekunden
+
+**`yfinance` auf `1.7.0` angehoben (24.09., vorher `1.5.2`):** API-Fläche, die
+`yahoo-service` nutzt (`Ticker(...).history(period=, interval=, auto_adjust=)`
+sowie `.history_metadata`), ist unverändert - im Sandbox gegen die echte
+1.7.0-Distribution per Introspektion geprüft (kein Yahoo-Netzwerkzugriff
+möglich, daher kein Live-Abruf getestet). Release Notes von 1.6.0/1.7.0 nennen
+u.a. "Price repair improvements" und einen Fix an der Split-/Volumen-
+Validierung der Preis-Reparatur - das ist ein plausibler, aber unbestätigter
+Kandidat für den seit 03.08. offenen Bug mit falschen Kursen bei einzelnen
+Tickern (ENR, HOT, CON). Nach dem Deploy dort gezielt gegenprüfen.
+
+**Rohstoffe laufen jetzt über Yahoo (24.09.), nicht mehr über TwelveData:**
+Gold `GC=F`, Silber `SI=F` (Futures-Symbole, kein Bindestrich/Schrägstrich-
+Problem). Die TwelveData-`SYMBOL_ALIASES` (`XAU-USD` usw., siehe
+`twelvedata-service`) bleiben im Code als Fallback bestehen, werden aber
+aktuell nicht verwendet.
 - Automatische Retry-Logik bei Rate-Limit: 5s, 10s, 20s
 
 **Name + Währung im `TickerQuote` (19./20.08. ergänzt):** `longName` und
@@ -929,6 +950,10 @@ im Klartext in den Logs (und im Chat) - nach diesem Leak den Key bei TwelveData 
 | Datenbank    | MySQL 9.7                         |
 | Migrations   | Flyway (V1–V5)                    |
 
+**Zeitzone (24.09.):** Alle Container laufen jetzt korrekt auf `Europe/Berlin`
+(zuvor lief history-fetcher und db-service, beide auf schlanken Basis-Images
+ohne `tzdata`, mit 2h Versatz - inzwischen für alle Container bestätigt).
+
 **Datenbanktabellen:**
 
 | Tabelle         | Zweck                                          |
@@ -1012,8 +1037,8 @@ ticker_delay_sec     = 0.5   # zwischen Yahoo-Tickern
 | Sprache      | Python 3.12                       |
 | Framework    | FastAPI + APScheduler             |
 | Port         | 8015                              |
-| Modell       | XGBoost (xgb_reversal.joblib)     |
-| Features     | 38 technische Indikatoren         |
+| Modell       | 3 eigenständige XGBoost-Modelle, je eines pro Zeitrahmen (`xgb_reversal_1d.joblib`/`_4h.joblib`/`_1h.joblib`) – seit 05.10. |
+| Features     | 38 technische Indikatoren je Modell, berechnet über `pandas-ta-openbb` |
 
 **Warum das KI-Signal bisher nur bei DAX40/DOW30 erschien (Befund + Fix, 21.09.):**
 Zwei unabhängige Ursachen, beide behoben:
@@ -1047,21 +1072,93 @@ sonst nach ein paar Live-Analysen) und ein Training NACH Punkt 1 (damit der
 Ticker in `feature_importance`/Diagnose auftaucht - für die reine Vorhersage
 reicht schon das bestehende Modell, sobald genug Zeilen da sind).
 
-**Was das Modell tut (am Code geprüft, 21.09.):**
-- Ein gemeinsames Modell für alle drei Zeitrahmen: Trainingsdaten aus 1d, 4h und 1h
-  aller Ticker werden zusammengeführt, `interval_code` (0/1/2) ist eines der 38 Features.
-- Label: 1, wenn der **höchste Schlusskurs der nächsten 5 Kerzen** mindestens 3 % über
-  dem aktuellen Schlusskurs liegt (nicht: Kurs nach 5 Tagen). "5" zählt in Kerzen des
-  jeweiligen Zeitrahmens (4h: 20 Stunden, 1h: 5 Stunden), die Schwelle ist überall 3 %.
-  Der angezeigte Wert ist also die Einschätzung "Anstieg > 3 % in 5 Kerzen", unabhängig
-  von Trend oder Wellenlage - "Umkehr" ist nur der Name.
-- Features (38): Renditen 1/3/5/10/20, Volatilität 5/10/20, MACD (4), Stochastik (3),
-  RSI (3), Bollinger (2), Volumen (3), Abstand zu GD 20/50/200 + zwei GD-Kreuzungen,
-  Kerzenform (4), Abstand zu 252-Kerzen-Hoch/-Tief, ROC 10/20, Anteil Kerzen über
-  GD 20/50, Zeitrahmen. Der im Docstring von `engineer.py` erwähnte Elliott-Score wird
-  NICHT verwendet. Alle Zeitfenster zählen in Kerzen (bei 4h/1h nicht in Tagen).
+**Modell-Optimierung auf echte Trendumkehr statt reinem Anstiegsschwellwert
+(05.10., Rolfs Konzept umgesetzt):** Das Label beantwortet jetzt sinngemäß
+vier Fragen hintereinander statt nur "steigt der Kurs um X %": *Welcher Trend
+liegt vor?* → *Ist dieser Trend erschöpft?* → *Gibt es erste Anzeichen einer
+Gegenbewegung?* → *Ist die Gegenbewegung stark genug, um als echtes Reversal
+zu gelten?* Konkret in `compute_labels()` (`features/engineer.py`):
+1. **Abwärtstrend-Vorbedingung:** Nur Kerzen, deren Schlusskurs mindestens
+   `downtrend_threshold_pct` (Default 8 %) unter dem höchsten Schlusskurs der
+   letzten `downtrend_lookback` Kerzen (Default 20) liegt, kommen als
+   Startpunkt überhaupt infrage - kein Downtrend, kein Label-Versuch (`NaN`,
+   fließt nicht ins Training ein).
+2. **Kein neues Tief vor der Zielbewegung:** Ab einem gültigen Startpunkt
+   zählt es nur als Umkehr (Label 1), wenn der Kurs innerhalb von
+   `forecast_horizon` Kerzen um `reversal_threshold_pct` steigt, OHNE vorher
+   unter das aktuelle Tief (minus `low_break_tolerance_pct` Toleranz, Default
+   0,3 %) zu fallen. Reißt der Kurs vorher ein neues Tief, gilt das als
+   Fortsetzung des Abwärtstrends (Label 0), auch wenn später doch noch ein
+   Anstieg folgt.
+3. `downtrend_lookback`/`downtrend_threshold_pct`/`low_break_tolerance_pct`
+   sind aktuell noch global (nicht pro Zeitrahmen) - bewusst zurückgestellt,
+   siehe Roadmap.
+
+**Drei getrennte Modelle statt einem gemeinsamen (05.10.):** Vorher ein
+gemeinsames Modell mit `interval_code` (0/1/2) als Feature, jetzt
+`INTERVALS = ("1d", "4h", "1h")` in `model/trainer.py` - jedes Intervall
+bekommt eigene Trainingsdaten, eigenes Modell, eigenen Scaler, eigenen
+Kalibrator und eigene `model_meta_{interval}.json`. Grund: "5 Kerzen" und
+"3 %" bedeuten bei 1d/4h/1h völlig unterschiedliche Zeiträume und
+Schwankungsbreiten - ein gemeinsames Modell musste das über das
+`interval_code`-Feature indirekt lernen, getrennte Modelle können direkt
+pro Zeitrahmen kalibrierte Schwellen verwenden (siehe nächster Punkt).
+`interval_code` ist dadurch kein Feature mehr (→ weiterhin 38 Features, aber
+inhaltlich verschoben). `/model/train`, `/model/status`, `/model/info`
+liefern jetzt je ein Objekt pro Zeitrahmen (`{"1d": {...}, "4h": {...}, "1h": {...}}`
+statt einem einzelnen Objekt) - `MlClient.fetchModelInfo()` in
+`agent-service-java` gibt das als generisches `Map<String,Object>` unverändert
+durch, musste dafür nicht angepasst werden.
+
+**Horizont/Schwelle jetzt pro Zeitrahmen (05.10., Claudes Einschätzung,
+von Rolf noch nicht an echten Trainingsergebnissen validiert):**
+`config.py` hat `forecast_horizon`/`reversal_threshold_pct` von einem
+einzelnen Wert auf `dict[str, int|float]` umgestellt:
+
+| Zeitrahmen | `forecast_horizon` (Kerzen) | `reversal_threshold_pct` |
+| ---------- | ---------------------------- | ------------------------- |
+| 1d         | 10                            | 5,0 %                      |
+| 4h         | 12                            | 3,0 %                      |
+| 1h         | 16                            | 2,0 %                      |
+
+Diese Werte sind Claudes erste Schätzung (grob an der jeweils überblickten
+Zeitspanne orientiert), noch NICHT an echten Trainingsergebnissen
+nachjustiert - bei Bedarf gemeinsam mit Rolf anhand von `/model/info`
+nachschärfen. **Achtung Produktionsfalle:** Eine externe `.env`/
+docker-compose-Umgebungsvariable mit dem alten skalaren
+`FORECAST_HORIZON=5`/`REVERSAL_THRESHOLD_PCT=3.0` lässt den Container mit
+einem `pydantic_core.ValidationError` (dict_type) abstürzen - solche Zeilen
+müssen von Rolf aus der eigenen `.env`/docker-compose-Konfiguration entfernt
+werden, das ist außerhalb der ausgelieferten Dateien und nicht per Code fixbar.
+
+**Features auf `pandas-ta`/`pandas-ta-openbb` umgestellt (05.10., "da wo es
+sinnvoll ist", Rolfs Vorgabe):** MACD, Stochastik, RSI, Bollinger-Bänder und
+SMA 20/50/200 kommen jetzt aus der Bibliothek statt aus Handberechnung
+(`ta.macd()`, `ta.stoch()`, `ta.rsi()`, `ta.bbands()`, `ta.sma()` in
+`engineer.py`). Verwendet wird explizit der Fork **`pandas-ta-openbb`**
+(`requirements.txt`), nicht das Original `pandas-ta` - das Original ist
+nicht NumPy-2-kompatibel und würde beim Import crashen. Spalten werden
+bewusst **positional** (`.iloc[:, N]`) statt über exakte String-Namen
+gelesen, weil pandas-ta je nach Version leicht abweichende Spaltennamen
+liefert (z.B. `"BBM_20_2"` statt `"BBM_20_2.0"` - beim Umbau als Bug
+aufgefallen und so umgangen).
+- Features (38, unverändert in der Zahl, `interval_code` entfernt): Renditen
+  1/3/5/10/20, Volatilität 5/10/20, MACD (4), Stochastik (3), RSI (3),
+  Bollinger (2), Volumen (3), Abstand zu GD 20/50/200 + zwei GD-Kreuzungen,
+  Kerzenform (4), Abstand zu 252-Kerzen-Hoch/-Tief, ROC 10/20, Anteil Kerzen
+  über GD 20/50. Der im Docstring von `engineer.py` erwähnte Elliott-Score
+  wird NICHT verwendet. Alle Zeitfenster zählen in Kerzen (bei 4h/1h nicht
+  in Tagen).
+- **Stochastik-Periode 14→10 (11.10., auf Rolfs Wunsch, abgestimmt mit
+  `agent-service-java`):** `ta.stoch(high, low, close, k=10, d=3, smooth_k=3)`
+  statt `k=14`. Dieselbe Änderung wurde zeitgleich in `BullishIndicator.java`
+  UND `BearishIndicator.java` (`STOCH_K = 10`, vorher `14`) vorgenommen, damit
+  regelbasierte Analyse und ML-Feature konsistent bleiben. **Alle drei
+  Modelle müssen nach dieser Änderung neu trainiert werden** (Feature-Werte
+  ändern sich), stand bei Sessionende noch aus.
 - Zeitreihen-Split 80/20 (siehe Einschränkungen unten), XGBoost mit
-  `scale_pos_weight = negativ/positiv`, 400 Bäume mit Early Stopping.
+  `scale_pos_weight = negativ/positiv`, 400 Bäume mit Early Stopping - je
+  Zeitrahmen-Modell einzeln.
 
 **Split, Early Stopping und Kalibrierung (überarbeitet 21.09., behebt die
 zuvor dokumentierten Einschränkungen):**
@@ -1094,12 +1191,13 @@ zuvor dokumentierten Einschränkungen):**
    Gesamtverschiebung verteilt - "Basiswert + Beiträge = angezeigter
    Modellwert" gilt dadurch weiterhin exakt (im Sandbox-Test geprüft,
    Abweichung nur Rundung, ≤0,1 Pp).
-5. **Noch nicht umgesetzt (bewusst zurückgestellt):** getrennte Modelle pro
-   Zeitrahmen statt eines gemeinsamen Modells mit `interval_code` als Feature.
-   Ob sich das lohnt, zeigt sich erst mit echten (nicht synthetischen)
-   Trainingsdaten über `breakdown`/`calibration` in `/model/info` - bei
-   deutlich unterschiedlicher Kalibrierungsgüte je Zeitrahmen wäre das der
-   nächste Schritt.
+5. **Umgesetzt am 05.10. (war hier vorher als zurückgestellt vermerkt):**
+   getrennte Modelle pro Zeitrahmen statt eines gemeinsamen Modells mit
+   `interval_code` als Feature - siehe oben ("Drei getrennte Modelle statt
+   einem gemeinsamen"). `_diagnostics()` liefert dadurch pro Modell ein
+   `summary`-Objekt statt der früheren `breakdown`-Aufschlüsselung je
+   Zeitrahmen (die ist jetzt überflüssig, da jedes Modell ohnehin nur einen
+   Zeitrahmen kennt).
 
 Nach dem Deployment dieser Änderung ist ein `POST /model/train` nötig, damit
 das gespeicherte Modell die Kalibrierungsdatei bekommt - vorher meldet
@@ -1147,9 +1245,16 @@ deutsches Label aus `features/labels.py`, Rohwert, formatierter Wert, Einfluss),
 Rest als `other_pp`. Dazu Einordnung `typical_score_pct` (Ø Modellwert im Training für
 diesen Zeitrahmen) und `actual_rate_pct` (tatsächlicher Anstiegsanteil) - beides erst
 bei Modellen, die nach dem 21.09. trainiert wurden. Neue Diagnosefelder in
-`model_meta.json`: `scale_pos_weight`, `breakdown` (je Zeitrahmen Samples, Anstiegsanteil,
-Ø Modellwert, Testmetriken), `calibration` (10 Bins Modellwert vs. Trefferquote),
-`feature_importance_all`.
+`model_meta_{interval}.json`: `scale_pos_weight`, `summary` (Samples, Anstiegsanteil,
+Ø Modellwert, Testmetriken für genau diesen Zeitrahmen - ersetzt seit 05.10. das frühere
+`breakdown`), `calibration` (10 Bins Modellwert vs. Trefferquote), `feature_importance_all`.
+
+**Seit 05.10. zusätzlich in `explanation` (für die dynamische Erklärtext-Anzeige im
+Client, siehe 3.1/3.2b):** `forecast_horizon`, `reversal_threshold_pct`,
+`downtrend_threshold_pct`, `downtrend_lookback` - direkt aus `model_meta_{interval}.json`
+übernommen, damit der Angular-Client den tatsächlich aktiven Horizont/Schwelle des
+geladenen Modells anzeigt statt fest "5 Kerzen"/"3 %" im Text zu hinterlegen (war vor
+dieser Änderung hartcodiert und stimmte nach der Label-Umstellung nicht mehr).
 
 **Modell-Persistenz:** Docker-Volume `ml_models:/app/models` – überlebt Container-Neustarts.
 **Retraining:** Automatisch jeden Sonntag 02:00 Uhr.
@@ -1326,11 +1431,108 @@ docker logs -f stock_history_fetcher
       Badge, kein SVG wie beim Elliott-Chart)
 - [ ] Thumbnail-Chart-Performance bei sehr langen Ticker-Listen (DAX/Dow) noch
       nicht geprüft
-- [ ] Klären: Python-`agent-service` (Port 8010) noch aktiv oder durch
-      `agent-service-java` ersetzt?
-- [ ] `stock-data-db-access`: README/Doku für Java-25-Stand ergänzen
+- [x] Klären: Python-`agent-service` noch aktiv? Erledigt (24.09.): entfernt.
+- [x] URL-Encoding-Lücke für Index-Ticker (`^DJI` u.ä.) in
+      `history-fetcher/app/data_client.py` (`upsert_ticker_meta()`/`get_meta()`)
+      behoben - derselbe Fix wie 22.09. im ml-service, hier nachgezogen.
+- [x] Yahoo-Finance-Bug "liefert bei großem `outputsize` für `interval=1h`
+      still Tagesdaten statt Stundendaten" aktiv erkannt und als Fehler
+      gemeldet statt es unbemerkt durchzulassen (`_is_actually_daily()` in
+      `yahoo-service/main.py`, Median-Zeitabstand-Heuristik ≥20h).
+- [x] 4h-Kerzen-Tiefenbeschränkung bei Yahoo UND TwelveData gleichzeitig
+      angegangen ("Beides gleich angehen", Rolfs Wunsch): `history-fetcher`
+      `fetch_4h_bars()` versucht zuerst ein großes `outputsize` und fällt bei
+      Yahoo-Fehler auf 600 zurück; `initial_4h_candles` (`config.py`) von 1080
+      auf 5000 angehoben. Von Rolf nach erneutem `/fetch/initial`-Lauf
+      bestätigt ("Das passt jetzt").
+- [x] Dabei entstandener eigener Bug behoben: stale Logging-Referenz auf die
+      umbenannte `outputsize`-Variable verursachte einen stillen `NameError`
+      pro Ticker in `fetch_4h_bars()` - von Rolf über DB-Zeilenzahl-Vergleich
+      entdeckt (Log zeigte Erfolg, DB wuchs aber nicht), durch eigene Variable
+      `used_outputsize` behoben.
+- [x] **ML-Modell auf echte Trendumkehr-Erkennung umgestellt (05.10.)** -
+      Label-Logik (Downtrend-Vorbedingung + Kein-neues-Tief-Bedingung) und
+      3 getrennte Modelle (1d/4h/1h) statt einem gemeinsamen mit
+      `interval_code`-Feature. Siehe 3.8 für Details. Horizont-/Schwellenwerte
+      sind Claudes erste Schätzung, noch nicht an echten Trainingsergebnissen
+      validiert.
+- [x] Feature-Engineering auf `pandas-ta-openbb` umgestellt (05.10.) statt
+      Handberechnung von MACD/Stochastik/RSI/Bollinger/SMA.
+- [x] KI-Signal-Erklärtext im Client dynamisch statt hartcodiert "3 %/5
+      Kerzen" gemacht (05.10.) - liest jetzt `forecast_horizon`/
+      `reversal_threshold_pct`/`downtrend_*` direkt aus der Modell-Erklärung.
+- [x] Stochastik-Periode 14→10 konsistent in `ml-service` (`ta.stoch`) UND
+      `agent-service-java` (`BullishIndicator`/`BearishIndicator`,
+      `STOCH_K`) geändert (11.10.). **Retraining aller 3 ML-Modelle danach
+      noch nicht durchgeführt** - Feature-Werte ändern sich, altes Modell
+      arbeitet bis dahin mit der alten Periode weiter.
+- [ ] Rolfs `.env`/docker-compose-Konfiguration muss die alten skalaren
+      `FORECAST_HORIZON`/`REVERSAL_THRESHOLD_PCT`-Variablen entfernen (sonst
+      `pydantic`-Absturz beim ml-service-Start) - außerhalb der ausgelieferten
+      Dateien, von Rolf selbst zu erledigen, Status bei Sessionende offen.
+- [ ] `downtrend_lookback`/`downtrend_threshold_pct`/`low_break_tolerance_pct`
+      sind noch global, nicht pro Zeitrahmen - dieselbe Begründung wie bei
+      `forecast_horizon`/`reversal_threshold_pct` würde dafür sprechen, von
+      Rolf noch nicht angefragt.
+- [x] Einstellungen-Panel (`settings-panel.component.ts`) im angular-client:
+      nach mehreren Zwischenständen (Abschnitt entfernt → wieder rein mit
+      "nur Anzeige"-Hinweis → auf statisches Akkordeon ohne 1d/4h/1h-Buttons
+      vereinfacht) auf ausdrücklichen Wunsch wieder **vollständig auf den
+      Stand vor diesen Änderungen zurückgesetzt** (11.10.): Toggle-Buttons
+      1d/4h/1h + Live-`MlModelInfoComponent`-Diagnoseansicht sind unverändert
+      vorhanden. Ob die Akkordeon-Vereinfachung (in ihrer zuletzt präzisierten
+      Fassung: Beschreibungstext behalten, nur "nur Anzeige"-Label und Buttons
+      entfernen, stattdessen Text "es gibt Modelle für 1d/4h/1h") später noch
+      gewünscht ist, ist offen - bei Bedarf erneut ansprechen, nicht annehmen.
 
-**Zuletzt geändert:** 2026-08-24
+**Zuletzt geändert:** 2026-10-11
+**Zuletzt bearbeitet von Claude:** Zwischen dem 24.08.-Stand (siehe Absatz
+unten für den älteren Verlauf) und heute lag ein großer Themenblock rund um
+Datentiefe und ML-Modell-Qualität. Zuerst zwei kleinere Bugfixes: die
+URL-Encoding-Lücke für Index-Ticker wie `^DJI` wurde auch im history-fetcher
+nachgezogen (war vorher nur im ml-service behoben), und ein stiller
+Yahoo-Finance-Bug (großes `outputsize` + `interval=1h` liefert manchmal
+unbemerkt Tagesdaten statt Stundendaten) wurde durch eine
+Median-Zeitabstand-Heuristik aktiv erkannt. Danach die 4h-Tiefenbeschränkung:
+Rolf bat ausdrücklich darum, Yahoo UND TwelveData in einem Zug anzugehen -
+`history-fetcher` versucht seitdem zuerst ein großes `outputsize` mit
+Rückfallebene 600 bei Yahoo-Fehlern, `initial_4h_candles` wurde deutlich
+angehoben. Ein dabei selbst eingebauter Bug (stale Variablenreferenz nach
+einem Rename, stiller `NameError`) wurde von Rolf über einen sorgfältigen
+DB-Zeilenzahl-Vergleich entdeckt, nicht über eine Fehlermeldung - ein
+Hinweis, bei Variablen-Umbenennungen alle Referenzstellen bewusst zu prüfen.
+
+Danach, mit ausreichend Daten, die ML-Modell-Überarbeitung: Rolf legte ein
+detailliertes vierstufiges Konzept vor (Trend erkennen → Erschöpfung →
+erste Gegenbewegung → ausreichend starke Umkehr), das Claude in
+`compute_labels()` als Downtrend-Vorbedingung + Kein-neues-Tief-Bedingung
+umgesetzt hat, zusammen mit drei getrennten Modellen (1d/4h/1h) statt einem
+gemeinsamen Modell mit `interval_code`-Feature - Rolfs Begründung: "5
+Kerzen" und "3 %" bedeuten je Zeitrahmen etwas völlig anderes. Auf
+Nachfrage, wie problematisch zwei verschiedene technische-Indikator-
+Bibliotheken zwischen `ml-service` (Python) und `agent-service-java` (ta4j)
+seien, entschied Rolf pragmatisch: `pandas-ta` nutzen, "da wo es sinnvoll
+ist" - konkret den NumPy-2-kompatiblen Fork `pandas-ta-openbb`, da
+Rolf sich mit Python nicht auskennt und die Wahl bewusst an Claude delegiert
+hat. Die Umstellung auf `pred_contribs`-basierte Erklärungen mit den neuen
+Horizont-/Schwellenfeldern ermöglichte es, den bisher hartcodierten
+"3 %/5 Kerzen"-Text im Client-Modal dynamisch zu machen (dabei einen
+Grammatikfehler - "zu eine solche Umkehr" statt "zu einer solchen Umkehr" -
+gefunden und behoben, von Rolf durch genaues Lesen des gerenderten Texts
+entdeckt). Kurz vor Sessionende dann die Stochastik-Periodenänderung 14→10,
+konsistent in `ml-service` UND beiden Java-Indicator-Klassen umgesetzt -
+Retraining steht noch aus.
+
+Parallel dazu mehrere iterative, teils widersprüchliche Wünsche zum
+"KI-Modell"-Abschnitt im Einstellungen-Panel des Clients (Abschnitt entfernen
+→ doch behalten, nur rein lesend → auf ein Akkordeon vereinfachen → wieder
+vollständig auf den Vor-Session-Stand zurücksetzen). Der aktuelle, bestätigte
+Zustand ist die ursprüngliche Live-Diagnoseansicht mit 1d/4h/1h-Umschaltung;
+ob die präzisierte Akkordeon-Variante später noch gewünscht wird, ist offen.
+
+---
+
+**Älterer Stand (bis 24.08.):**
 **Zuletzt bearbeitet von Claude:** Aufbauend auf dem 19./20.08.-Stand (siehe
 Roadmap oben für Details zu Option C, Currency-/Name-Rollout) folgten drei
 weitere Sessions rund um die lokale Build-Verifikation. Rolf hat `mvn compile`

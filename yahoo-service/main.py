@@ -45,6 +45,22 @@ RETRY_DELAYS = [5, 10, 20]
 session = curl_requests.Session(impersonate="chrome")
 
 
+def _is_actually_daily(index: pd.DatetimeIndex) -> bool:
+    """
+    Erkennt den beobachteten Yahoo-Bug: trotz interval="1h" angefordert,
+    liefert Yahoo bei großem period manchmal Tages-Granularität zurück
+    (unbestätigte Ursache, siehe history-fetcher/data_client.py). Prüfung:
+    Median-Abstand zwischen Kerzen >= 20h deutet auf Tageskerzen hin -
+    normale Intraday-Lücken (Handelsschluss, Wochenende) liegen im Median
+    deutlich darunter, auch wenn einzelne Lücken größer sind.
+    """
+    if len(index) < 3:
+        return False
+    diffs = index.to_series().diff().dropna()
+    median_hours = diffs.median().total_seconds() / 3600
+    return median_hours >= 20
+
+
 # ── 3. Pydantic Models ───────────────────────────────────────
 class QuoteRequest(BaseModel):
     tickers: list[str]
@@ -120,6 +136,21 @@ def fetch_ohlcv(ticker: str, outputsize: int, interval: str = "1d") -> TickerQuo
 
             df = df[["open", "high", "low", "close", "volume"]].dropna()
             df.index = pd.to_datetime(df.index)
+
+            # Aktiver Schutz gegen den bekannten Granularitäts-Bug: bisher
+            # wurde ein stiller Rückfall auf Tagesdaten unbemerkt als "1h"
+            # durchgereicht. Jetzt wird das erkannt und als Fehler gemeldet,
+            # statt falsch gelabelte Daten zurückzugeben (24.09.-Notiz war
+            # daher unbegründet still - der Aufrufer bekam nie ein Fehlersignal).
+            if interval == "1h" and _is_actually_daily(df.index):
+                logger.warning(
+                    f"{ticker}: interval=1h angefordert (period={period}), "
+                    f"aber Antwort hat Tages-Granularität - breche ab"
+                )
+                return TickerQuote(
+                    ticker=ticker, bars=[],
+                    error="Yahoo lieferte trotz interval=1h Tages-Granularität (period vermutlich zu groß)"
+                )
 
             # Für 1d reicht das reine Datum (bisheriges Format,
             # damit bestehende Daily-Verarbeitung unverändert bleibt).
