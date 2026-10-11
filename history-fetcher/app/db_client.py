@@ -34,7 +34,7 @@ async def upsert_ticker_meta(
         "companyName": company_name,
     }
     async with httpx.AsyncClient(timeout=TIMEOUT) as client:
-        resp = await client.put(f"{BASE}/api/ohlcv/meta/{ticker}", json=payload)
+        resp = await client.put(f"{BASE}/api/ohlcv/meta/{quote(ticker, safe='')}", json=payload)
         if resp.status_code in (200, 201):
             return True
         logger.error(f"upsert_ticker_meta [{ticker}]: {resp.status_code} {resp.text}")
@@ -52,7 +52,7 @@ async def get_all_meta() -> list[dict]:
 async def get_meta(ticker: str) -> dict | None:
     """Gibt Metadaten + Abdeckungsinfo für einen Ticker zurück."""
     async with httpx.AsyncClient(timeout=TIMEOUT) as client:
-        resp = await client.get(f"{BASE}/api/ohlcv/meta/{ticker}")
+        resp = await client.get(f"{BASE}/api/ohlcv/meta/{quote(ticker, safe='')}")
         if resp.status_code == 404:
             return None
         resp.raise_for_status()

@@ -30,7 +30,7 @@ from app.api.db_client import get_all_daily_bars, get_daily_bars, get_4h_bars, g
 from app.config import settings
 from app.features.labels import label_of
 from app.model import predictor
-from app.model.trainer import META_PATH, load_meta, train
+from app.model.trainer import INTERVALS, any_model_ready, load_all_meta, load_meta, train
 
 logging.basicConfig(
     level=logging.INFO,
@@ -106,17 +106,21 @@ async def lifespan(app: FastAPI):
     # Modell beim Start laden (falls vorhanden)
     predictor.reload()
 
-    # Wenn kein Modell vorhanden → automatisches Training
-    if not META_PATH.exists():
+    # Wenn kein einziges Modell vorhanden → automatisches Training
+    if not any_model_ready():
         logger.info("Kein Modell gefunden → automatisches Training in 15 Sekunden ...")
         await asyncio.sleep(15)
         asyncio.create_task(_run_training("auto (initial)"))
     else:
-        meta = load_meta()
-        logger.info(
-            f"Modell geladen – trainiert am {meta.get('trained_at', '?')}, "
-            f"ROC-AUC={meta.get('backtesting', {}).get('roc_auc', '?')}"
-        )
+        for iv in INTERVALS:
+            m = load_meta(iv)
+            if m:
+                logger.info(
+                    f"Modell {iv} geladen – trainiert am {m.get('trained_at', '?')}, "
+                    f"ROC-AUC={m.get('backtesting', {}).get('roc_auc', '?')}"
+                )
+            else:
+                logger.info(f"Modell {iv} noch nicht trainiert")
 
     yield
     scheduler.shutdown()
@@ -169,61 +173,47 @@ class PredictResponse(BaseModel):
 @app.get("/health")
 def health():
     return {
-        "status":    "ok",
-        "service":   "ml-service",
-        "training":  _training,
-        "model_ready": META_PATH.exists(),
+        "status":      "ok",
+        "service":     "ml-service",
+        "training":    _training,
+        "model_ready": any_model_ready(),
     }
 
 
 @app.get("/model/status")
 def model_status():
-    meta = load_meta()
     next_run = None
     job = scheduler.get_job("weekly_retrain")
     if job and job.next_run_time:
         next_run = job.next_run_time.isoformat()
 
     return {
-        "model_ready":    META_PATH.exists(),
+        "model_ready":     any_model_ready(),
         "training_active": _training,
-        "next_retrain":   next_run,
-        "last_train":     _last_train or None,
-        "model_meta":     meta,
+        "next_retrain":    next_run,
+        "last_train":      _last_train or None,
+        "model_meta":      load_all_meta(),  # {"1d": {...} | None, "4h": ..., "1h": ...}
     }
 
 
-@app.get("/model/info")
-def model_info():
-    """
-    Aufbereitete Modell-Info für die Anzeige im Client (Einstellungen → KI-Modell).
-    Enthält deutsche Feature-Labels, die Signal-Schwellen und Diagnosedaten
-    (Zusammensetzung der Testmenge, Kalibrierung), sobald sie im Training
-    berechnet wurden (Modelle vor dem 21.09. haben diese Felder noch nicht).
-    """
-    meta = load_meta()
+def _model_info_for(meta: dict | None) -> dict:
+    """Aufbereitete Modell-Info EINES Zeitrahmens (siehe model_info())."""
     if meta is None:
         return {"model_ready": False}
 
     importance = meta.get("feature_importance_all") or meta.get("feature_importance") or {}
-    next_run = None
-    job = scheduler.get_job("weekly_retrain")
-    if job and job.next_run_time:
-        next_run = job.next_run_time.isoformat()
+    summary    = meta.get("summary") or {}
 
     return {
         "model_ready":       True,
-        "training_active":   _training,
         "trained_at":        meta.get("trained_at"),
-        "next_retrain":      next_run,
         "total_samples":     meta.get("total_samples"),
         "train_samples":     meta.get("train_samples"),
         "test_samples":      meta.get("test_samples"),
-        "tickers_count":     len({t.split("/")[0] for t in meta.get("tickers", [])}),
+        "tickers_count":     len(meta.get("tickers", [])),
         "positive_rate_pct": meta.get("positive_rate_pct"),
         "forecast_horizon":  meta.get("forecast_horizon"),
         "reversal_threshold_pct": meta.get("reversal_threshold"),
-        "intervals_trained": meta.get("intervals_trained", []),
         "scale_pos_weight":  meta.get("scale_pos_weight"),
         # False bei Modellen, die noch vor dem 21.09. trainiert wurden (kein
         # Kalibrator vorhanden) - der Modellwert ist dann unkalibriert, siehe
@@ -231,18 +221,42 @@ def model_info():
         "calibrated":        meta.get("calibrated", False),
         "val_samples":       meta.get("val_samples"),
         "metrics":           meta.get("backtesting", {}),
-        "thresholds": {
-            "weak":     round(predictor.THRESHOLD_WEAK * 100),
-            "moderate": round(predictor.THRESHOLD_MODERATE * 100),
-            "strong":   round(predictor.THRESHOLD_STRONG * 100),
-        },
+        "summary":           summary,
         "feature_importance": [
             {"feature": name, "label": label_of(name), "importance": value}
             for name, value in list(importance.items())[:12]
         ],
-        "breakdown":         meta.get("breakdown"),
         "calibration":       meta.get("calibration"),
     }
+
+
+@app.get("/model/info")
+def model_info():
+    """
+    Aufbereitete Modell-Info für die Anzeige im Client, JE ZEITRAHMEN
+    (29.09.: drei eigenständige Modelle statt eines gemeinsamen - siehe
+    CLAUDE.md 3.8). Enthält deutsche Feature-Labels, die Signal-Schwellen
+    (gemeinsam für alle drei) sowie Diagnosedaten je Modell.
+
+    Antwortform: {"1d": {...}, "4h": {...}, "1h": {...}}, jeweils mit der
+    bisherigen flachen Struktur (model_ready, trained_at, metrics, ...).
+    """
+    next_run = None
+    job = scheduler.get_job("weekly_retrain")
+    if job and job.next_run_time:
+        next_run = job.next_run_time.isoformat()
+
+    metas = load_all_meta()
+    result = {iv: _model_info_for(metas.get(iv)) for iv in INTERVALS}
+    for iv in INTERVALS:
+        result[iv]["training_active"] = _training
+        result[iv]["next_retrain"]    = next_run
+        result[iv]["thresholds"] = {
+            "weak":     round(predictor.THRESHOLD_WEAK * 100),
+            "moderate": round(predictor.THRESHOLD_MODERATE * 100),
+            "strong":   round(predictor.THRESHOLD_STRONG * 100),
+        }
+    return result
 
 
 @app.post("/model/train")

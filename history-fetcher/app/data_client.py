@@ -287,20 +287,37 @@ async def fetch_4h_bars(
     TwelveData: interval="4h" nativ verfügbar, direkt abrufen.
     """
     if source == "yahoo":
-        # Yahoo/yfinance liefert 1h-Daten nur für ~730 Tage; bei größerem
-        # outputsize fällt der yahoo-service offenbar stillschweigend auf
-        # interval="1d" zurück (beobachtet: outputsize=1440 → 1440
-        # Tageskerzen statt Stundenkerzen, outputsize=82 → korrekt 1h).
-        # Daher deutlich unter dieser Schwelle bleiben. Die vollen
-        # initial_4h_candles werden so nicht in einem Schritt erreicht,
-        # füllen sich aber über die inkrementellen Updates kontinuierlich auf.
-        outputsize = min(candles * 4 + 40, 600)
+        # Yahoo/yfinance liefert 1h-Daten grundsätzlich nur für ~730 Tage
+        # zurück (≈5.100 1h-Kerzen bei ~7 Handelsstunden/Tag) - das ist eine
+        # harte Grenze, unabhängig vom outputsize. Der frühere 600er-Deckel
+        # war ein Workaround für einen unklaren Bug (großes outputsize →
+        # stiller Rückfall auf Tages-Granularität); yahoo-service erkennt
+        # das jetzt aktiv und meldet einen Fehler statt falsch gelabelter
+        # Daten (siehe main.py _is_actually_daily). Daher: erst der volle,
+        # nahe an der echten Grenze liegende Versuch, bei Fehler Fallback
+        # auf den alten sicheren Wert.
+        outputsize_full = min(candles * 4 + 40, 5200)
+        used_outputsize = outputsize_full
         quote = await _stream_quotes(
             settings.yahoo_service_url,
             ticker,
-            outputsize,
+            outputsize_full,
             interval="1h",
         )
+        if quote is not None and quote.get("error"):
+            logger.warning(
+                f"[{ticker}] 4h (Yahoo) großer Abruf (outputsize={outputsize_full}) "
+                f"fehlgeschlagen: {quote['error']} - Fallback auf outputsize=600"
+            )
+            outputsize_fallback = min(candles * 4 + 40, 600)
+            used_outputsize = outputsize_fallback
+            quote = await _stream_quotes(
+                settings.yahoo_service_url,
+                ticker,
+                outputsize_fallback,
+                interval="1h",
+            )
+
         if quote is None or quote.get("error"):
             if quote and quote.get("error"):
                 logger.warning(f"[{ticker}] 4h (Yahoo) Service-Fehler: {quote['error']}")
@@ -324,7 +341,7 @@ async def fetch_4h_bars(
                 from datetime import datetime as _dt
                 delta = _dt.fromisoformat(t1) - _dt.fromisoformat(t0)
                 logger.info(
-                    f"[{ticker}] 4h-Diagnose: outputsize={outputsize}, "
+                    f"[{ticker}] 4h-Diagnose: outputsize={used_outputsize}, "
                     f"erste Kerzen: {t0} → {t1} (Δ={delta}), "
                     f"letzte Kerze: {t_last}"
                 )

@@ -2,11 +2,12 @@ import {
   Component, HostListener, computed, effect, inject, input, output, signal, untracked
 } from '@angular/core';
 import { MatButtonModule } from '@angular/material/button';
+import { MatButtonToggleModule } from '@angular/material/button-toggle';
 import { MatIconModule } from '@angular/material/icon';
 import { MatProgressSpinnerModule } from '@angular/material/progress-spinner';
 import { MatTooltipModule } from '@angular/material/tooltip';
 
-import { MlModelInfo, VpnInfo, VpnRotateResult } from '../../models/stock.models';
+import { MlInterval, MlModelInfo, VpnInfo, VpnRotateResult } from '../../models/stock.models';
 import { MlService } from '../../services/ml.service';
 import { VpnService } from '../../services/vpn.service';
 import { MlModelInfoComponent } from '../ml-model-info/ml-model-info.component';
@@ -21,11 +22,19 @@ type MessageKind = 'ok' | 'warn' | 'error';
  * zu wechseln. Die Komponente bleibt dauerhaft im DOM, damit ein laufender
  * IP-Wechsel auch bei geschlossenem Panel weiterläuft und beim erneuten
  * Öffnen sichtbar ist.
+ *
+ * Zeigt außerdem (nur lesend, nichts hier ist editierbar - kein Trainings-
+ * Button, keine änderbaren Schwellenwerte) eine Diagnose-Ansicht der drei
+ * KI-Modelle (01.10.: kurz entfernt, dann auf Wunsch wiederhergestellt,
+ * nachdem klar war, dass es ohnehin nur eine reine Anzeige ist).
  */
 @Component({
   selector: 'app-settings-panel',
   standalone: true,
-  imports: [MatButtonModule, MatIconModule, MatProgressSpinnerModule, MatTooltipModule, MlModelInfoComponent],
+  imports: [
+    MatButtonModule, MatButtonToggleModule, MatIconModule, MatProgressSpinnerModule,
+    MatTooltipModule, MlModelInfoComponent,
+  ],
   template: `
     <div class="backdrop" [class.visible]="open()" (click)="close()"></div>
 
@@ -113,7 +122,7 @@ type MessageKind = 'ok' | 'warn' | 'error';
         <section class="section section-ml">
           <div class="section-head">
             <h3 class="section-title">
-              KI-Modell <span class="section-hint">Umkehrsignal</span>
+              KI-Modell <span class="section-hint">Umkehrsignal, nur Anzeige</span>
             </h3>
             <button mat-icon-button (click)="reloadMl()" [disabled]="mlLoading()"
                     aria-label="Modell-Info aktualisieren" matTooltip="Aktualisieren">
@@ -126,7 +135,13 @@ type MessageKind = 'ok' | 'warn' | 'error';
               <mat-spinner diameter="18" /> Modell-Info wird geladen …
             </div>
           } @else if (mlInfo(); as info) {
-            <app-ml-model-info [info]="info" />
+            <mat-button-toggle-group class="ml-interval-toggle" [value]="mlInterval()"
+                                      (change)="mlInterval.set($event.value)">
+              <mat-button-toggle value="1d">1d</mat-button-toggle>
+              <mat-button-toggle value="4h">4h</mat-button-toggle>
+              <mat-button-toggle value="1h">1h</mat-button-toggle>
+            </mat-button-toggle-group>
+            <app-ml-model-info [info]="info[mlInterval()]" />
           } @else if (mlError()) {
             <div class="note error">{{ mlError() }}</div>
           }
@@ -167,6 +182,8 @@ type MessageKind = 'ok' | 'warn' | 'error';
     .panel-body  { flex: 1; overflow-y: auto; padding: 20px 24px; }
 
     .section-ml { margin-top: 28px; padding-top: 20px; border-top: 1px solid #e5e7eb; }
+    .ml-interval-toggle { margin-bottom: 12px; }
+    .ml-interval-toggle ::ng-deep .mat-button-toggle-label-content { padding: 0 14px; line-height: 32px; }
 
     .section-head {
       display: flex; align-items: center; justify-content: space-between;
@@ -228,7 +245,12 @@ export class SettingsPanelComponent {
   readonly loadError   = signal<string | null>(null);
   readonly rotating    = signal(false);
 
-  readonly mlInfo    = signal<MlModelInfo | null>(null);
+  readonly mlInfo     = signal<MlModelInfo | null>(null);
+  /** Welches der drei eigenständigen Modelle (29.09.) gerade angezeigt wird -
+   *  unabhängig vom Zeitrahmen der aktiven Analyse (siehe filter-header),
+   *  damit man hier auch mal ein anderes Modell nachschauen kann. Reine
+   *  Ansichtsauswahl, keine Einstellung - ändert nichts am Modell selbst. */
+  readonly mlInterval = signal<MlInterval>('1d');
   readonly mlLoading = signal(false);
   readonly mlError   = signal<string | null>(null);
   readonly message     = signal<{ kind: MessageKind; text: string } | null>(null);

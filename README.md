@@ -5,7 +5,8 @@ automatic database write‑back, XGBoost‑based AI reversal signal (with a
 per‑prediction explanation), and in‑app VPN control for the Yahoo data feed.
 
 - Angular client (:4200) sends `POST /analyze/stream` to the Agent Service
-  (:8010 Python, or :8016 Java — same API contract).
+  (:8016, Java/Spring Boot — the original Python agent‑service has been
+  retired, this is now the only agent).
 - Agent Service subscribes to SSE `/quotes/stream` from the Yahoo Service
   (:8011) [via VPN] or TwelveData Service (:8012), for **all three**
   timeframes (1d, 4h, 1h) — 4h/1h used to be read only from the database,
@@ -305,8 +306,7 @@ trained before this change; retraining fixes it).
 
 | Service            | Port | Description                                          |
 | ------------------ | ---- | ----------------------------------------------------- |
-| Agent Service      | 8010 | AI agent · SSE proxy · Elliott/MACD/Stochastic · ML   |
-| Agent Service Java | 8016 | Java/Spring Boot port of Agent Service (same API contract, ta4j‑based Elliott Wave detection, live 1d/4h/1h fetch + DB write‑back, VPN control) |
+| Agent Service      | 8016 | AI agent (Java/Spring Boot, ta4j‑based Elliott Wave detection) · SSE proxy · Elliott/MACD/Stochastic · ML · live 1d/4h/1h fetch + DB write‑back · VPN control. The original Python agent‑service (previously :8010) has been retired. |
 | VPN Gateway        | 8011 | Gluetun VPN · forwards port 8011 to Yahoo; control server on 8000 (not published) |
 | Yahoo Service      | –    | Yahoo Finance · runs inside VPN network · `/ip` reports current exit IP/location |
 | TwelveData Service | 8012 | Twelve Data API · SSE · delay per ticker (Free plan) · symbol aliases for commodities/forex pairs (see [Ticker Formats](#ticker-formats)) |
@@ -317,8 +317,7 @@ trained before this change; retraining fixes it).
 
 ### Swagger Docs
 
-- Agent: http://localhost:8010/docs
-- Agent (Java): http://localhost:8016/actuator (Spring Boot Actuator, no Swagger UI configured yet)
+- Agent: http://localhost:8016/actuator (Spring Boot Actuator, no Swagger UI configured yet)
 - Yahoo: http://localhost:8011/docs (via VPN gateway)
 - TwelveData: http://localhost:8012/docs
 - DB Access: http://localhost:8013/swagger-ui.html
@@ -334,15 +333,18 @@ trained before this change; retraining fixes it).
 - **Twelve Data:** US tickers (e.g., `AAPL`, `MSFT`, `JPM`)
 - **Index tickers** (e.g., `^GDAXI`, `^DJI`) work with either source; the
   `^` is now correctly URL‑encoded end‑to‑end (History Fetcher, ML Service).
-- **Commodities/forex pairs via Twelve Data** (e.g., gold, silver) must be
-  entered with a **hyphen**, not a slash — Twelve Data itself requires a
-  slash in the symbol (`XAU/USD`), but a slash cannot appear in our own
-  internal REST paths. Enter the ticker as `XAU-USD` (source Twelve Data);
+- **Commodities via Yahoo Finance (current approach):** gold `GC=F`,
+  silver `SI=F` — Yahoo futures symbols, no hyphen/slash handling needed. Use
+  source `yahoo` for these.
+- **Commodities/forex pairs via Twelve Data (fallback, not currently used):**
+  Twelve Data requires a slash in the symbol (`XAU/USD`), which cannot appear
+  in our own internal REST paths, so such a ticker must be entered with a
+  **hyphen** instead (`XAU-USD`, source Twelve Data) —
   `twelvedata-service` translates it to `XAU/USD` only for the outbound API
-  call. Currently mapped: `XAU-USD` (gold), `XAG-USD` (silver — note: Twelve
-  Data's `time_series` endpoint returned 404 for this in testing, i.e. no
-  historical data available regardless of symbol; `SI=F` via Yahoo is a
-  working alternative), `XPT-USD` (platinum), `XPD-USD` (palladium).
+  call. Mapped in `SYMBOL_ALIASES`: `XAU-USD` (gold), `XAG-USD` (silver — note:
+  Twelve Data's `time_series` endpoint returned 404 for this in testing, i.e.
+  no historical data available there regardless of symbol), `XPT-USD`
+  (platinum), `XPD-USD` (palladium).
 
 Comma‑separated in the Angular client:
 `AAPL, MSFT, JPM, ADS.DE`
@@ -424,14 +426,7 @@ gluetun-auth/config.toml        # Gluetun control-server auth (VPN panel, IP rot
 .env                            # Secrets (do not commit!)
 .env.example                    # Template for .env
 
-agent-service/
-  main.py                       # SSE proxy + analysis + ML integration
-  bullish_reversal_indicator.py # Elliott + MACD + Stochastic (bullish)
-  bearish_reversal_indicator.py # Elliott + MACD + Stochastic (bearish)
-  candle_patterns.py            # 5 candlestick patterns
-  Dockerfile / requirements.txt
-
-agent-service-java/
+agent-service-java/          # The only Agent Service (Python agent-service retired)
   src/main/java/rf/stock/agent/
     indicator/                  # BullishIndicator / BearishIndicator (ta4j-based
                                  # Elliott Wave via ElliottWaveFacade, MACD, Stochastic)
@@ -446,7 +441,7 @@ agent-service-java/
 
 yahoo-service/
   main.py                       # Yahoo Finance + SSE + curl_cffi + /ip (exit IP/location)
-  Dockerfile / requirements.txt
+  Dockerfile / requirements.txt  # yfinance 1.7.0
 
 twelvedata-service/
   main.py                       # Twelve Data API + SSE + interval parameter +

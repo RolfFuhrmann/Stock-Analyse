@@ -1,8 +1,9 @@
 """
 ml-service/app/model/predictor.py
 
-Lädt das trainierte Modell und berechnet für einen einzelnen Ticker
-die Umkehrwahrscheinlichkeit auf Basis der letzten N Kerzen.
+Lädt die drei trainierten Modelle (1d/4h/1h, siehe trainer.py, 29.09.) und
+berechnet für einen einzelnen Ticker die Umkehrwahrscheinlichkeit auf Basis
+der letzten N Kerzen des jeweils angefragten Zeitrahmens.
 """
 import logging
 
@@ -13,38 +14,42 @@ import xgboost as xgb
 from app.config import settings
 from app.features.engineer import FEATURE_NAMES, compute_features
 from app.features.labels import format_value, label_of
-from app.model.trainer import load_calibrator, load_meta, load_model
+from app.model.trainer import INTERVALS, load_calibrator, load_meta, load_model
 
 logger = logging.getLogger(__name__)
 
-# Modell einmalig beim Import laden (wird durch retrain() neu geladen)
-_model, _scaler, _calibrator = None, None, None
+# Pro Interval geladenes Modell: {"1d": {"model":..., "scaler":..., "calibrator":...}, ...}
+_models: dict[str, dict] = {}
 
 
 def _ensure_loaded():
-    global _model, _scaler, _calibrator
-    if _model is None:
-        _model, _scaler = load_model()
-        _calibrator = load_calibrator()
+    if not _models:
+        reload()
 
 
 def reload():
-    """Nach einem Retraining aufrufen um das neue Modell zu laden."""
-    global _model, _scaler, _calibrator
-    _model, _scaler = load_model()
-    _calibrator = load_calibrator()
-    logger.info("Modell neu geladen")
+    """Nach einem Retraining aufrufen um alle drei Modelle neu zu laden."""
+    for interval in INTERVALS:
+        model, scaler = load_model(interval)
+        _models[interval] = {
+            "model":      model,
+            "scaler":     scaler,
+            "calibrator": load_calibrator(interval),
+        }
+    ready = [iv for iv, m in _models.items() if m["model"] is not None]
+    logger.info(f"Modelle neu geladen ({', '.join(ready) if ready else 'keines verfügbar'})")
 
 
-def _calibrate(p: float) -> float:
+def _calibrate(interval: str, p: float) -> float:
     """
     Bildet den rohen Modellwert auf die kalibrierte Wahrscheinlichkeit ab
     (siehe trainer.train, Schritt 5). Ohne Kalibrator (Modelle vor dem 21.09.)
     bleibt der Wert unverändert - /model/info meldet das über "calibrated".
     """
-    if _calibrator is None:
+    calibrator = _models.get(interval, {}).get("calibrator")
+    if calibrator is None:
         return p
-    return float(_calibrator.predict([p])[0])
+    return float(calibrator.predict([p])[0])
 
 
 # Schwellen für die Signal-Einstufung (Modellwert 0-1)
@@ -60,7 +65,7 @@ def _sigmoid(x: float) -> float:
     return 1.0 / (1.0 + np.exp(-x))
 
 
-def _explain(X: pd.DataFrame, X_scaled: np.ndarray, prob: float, interval: str) -> dict | None:
+def _explain(X: pd.DataFrame, X_scaled: np.ndarray, interval: str) -> dict | None:
     """
     Erklärt, wie der Modellwert zustande kommt (Beitrag jedes Merkmals).
 
@@ -74,15 +79,16 @@ def _explain(X: pd.DataFrame, X_scaled: np.ndarray, prob: float, interval: str) 
     Basiswert = Ausgabe des Modells für einen "durchschnittlichen" Fall. Wie der
     Modellwert selbst ist er kein kalibrierter Prozentsatz (siehe /model/info).
     """
+    model = _models[interval]["model"]
     try:
-        booster = _model.get_booster()
+        booster = model.get_booster()
 
         # Wie predict_proba nur die Bäume bis zur besten Iteration verwenden: Mit
         # early_stopping_rounds enthält der Booster weitere Bäume dahinter, die
         # predict_proba ignoriert - ohne diese Einschränkung passen Erklärung und
         # angezeigter Modellwert nicht zusammen.
         try:
-            iteration_range = (0, int(_model.best_iteration) + 1)
+            iteration_range = (0, int(model.best_iteration) + 1)
         except AttributeError:
             iteration_range = (0, 0)  # 0 = alle Bäume
 
@@ -98,8 +104,8 @@ def _explain(X: pd.DataFrame, X_scaled: np.ndarray, prob: float, interval: str) 
         # Basiswert und Modellwert getrennt kalibrieren (siehe _calibrate) - so
         # bleibt "Basiswert + Beiträge = Modellwert" auch nach der Kalibrierung
         # exakt erhalten, und der angezeigte Wert stimmt mit predict() überein.
-        base_prob   = _calibrate(_sigmoid(bias))
-        full_prob   = _calibrate(_sigmoid(margin))
+        base_prob   = _calibrate(interval, _sigmoid(bias))
+        full_prob   = _calibrate(interval, _sigmoid(margin))
         total_shift = float(feature_parts.sum())
         prob_shift  = full_prob - base_prob   # Gesamtverschiebung in (kalibrierter) Wahrscheinlichkeit
 
@@ -127,8 +133,8 @@ def _explain(X: pd.DataFrame, X_scaled: np.ndarray, prob: float, interval: str) 
 
         # Einordnung: typischer Modellwert und tatsächliche Trefferquote im Training
         # für diesen Zeitrahmen (Modelle vor dem 21.09. haben diese Diagnose noch nicht)
-        meta    = load_meta() or {}
-        context = (meta.get("breakdown") or {}).get(interval) or {}
+        meta    = load_meta(interval) or {}
+        context = meta.get("summary") or {}
 
         return {
             "interval":          interval,
@@ -139,6 +145,17 @@ def _explain(X: pd.DataFrame, X_scaled: np.ndarray, prob: float, interval: str) 
             "other_count":       int(len(rest)),
             "typical_score_pct": context.get("mean_score_pct"),
             "actual_rate_pct":   context.get("positive_rate_pct"),
+            # Definition der Vorhersage (29.09., Reversal-Label statt reinem
+            # Anstiegs-Label) - aus dem trainierten Modell selbst gelesen (nicht
+            # aus den aktuellen `settings`), damit die Erklärung auch nach einer
+            # künftigen Schwellenwert-Änderung zum GERADE GELADENEN Modell passt,
+            # nicht zur aktuellen Config. Modelle vor dem 29.09. haben diese
+            # Felder noch nicht (downtrend_threshold_pct fehlt dann) - der Client
+            # fällt in dem Fall auf eine generische Beschreibung zurück.
+            "forecast_horizon":        meta.get("forecast_horizon"),
+            "reversal_threshold_pct":  meta.get("reversal_threshold"),
+            "downtrend_threshold_pct": meta.get("downtrend_threshold_pct"),
+            "downtrend_lookback":      meta.get("downtrend_lookback"),
         }
     except Exception as e:
         logger.error(f"Erklärung fehlgeschlagen: {e}")
@@ -147,11 +164,12 @@ def _explain(X: pd.DataFrame, X_scaled: np.ndarray, prob: float, interval: str) 
 
 def predict(df: pd.DataFrame, interval: str = "1d") -> dict:
     """
-    Berechnet die Umkehrwahrscheinlichkeit für die letzte Kerze im DataFrame.
+    Berechnet die Umkehrwahrscheinlichkeit für die letzte Kerze im DataFrame,
+    mit dem zu `interval` passenden, eigenständigen Modell.
 
     df:       OHLCV-DataFrame (chronologisch aufsteigend, Mindestlänge siehe
               settings.min_daily_candles / min_4h_candles / min_1h_candles)
-    interval: "1d" | "4h" | "1h" – wird als Feature #39 eingebettet
+    interval: "1d" | "4h" | "1h" – wählt das zu verwendende Modell
 
     Gibt zurück:
     {
@@ -166,7 +184,10 @@ def predict(df: pd.DataFrame, interval: str = "1d") -> dict:
     """
     _ensure_loaded()
 
-    if _model is None:
+    model  = _models.get(interval, {}).get("model")
+    scaler = _models.get(interval, {}).get("scaler")
+
+    if model is None:
         return {
             "reversal_prob":   None,
             "reversal_pct":    None,
@@ -200,14 +221,14 @@ def predict(df: pd.DataFrame, interval: str = "1d") -> dict:
 
         # Letzte Zeile = aktuellster Zeitpunkt
         X = features.iloc[[-1]]
-        X_scaled = _scaler.transform(X)
+        X_scaled = scaler.transform(X)
 
-        prob_raw    = float(_model.predict_proba(X_scaled)[0, 1])
-        explanation = _explain(X, X_scaled, prob_raw, interval)
+        prob_raw    = float(model.predict_proba(X_scaled)[0, 1])
+        explanation = _explain(X, X_scaled, interval)
         # Kalibrierter Wert aus der Erklärung übernehmen, damit beide exakt
         # übereinstimmen (siehe _explain) - nur falls die Erklärung
         # fehlschlägt, hier direkt kalibrieren.
-        prob = explanation["prob_pct"] / 100 if explanation else _calibrate(prob_raw)
+        prob = explanation["prob_pct"] / 100 if explanation else _calibrate(interval, prob_raw)
 
         # ── Signal-Stärke ──────────────────────────────────────
         if prob >= THRESHOLD_STRONG:
@@ -224,7 +245,7 @@ def predict(df: pd.DataFrame, interval: str = "1d") -> dict:
             confidence = "low"
 
         # ── Top-3 Feature-Werte (für die Anzeige) ─────────────
-        meta = load_meta()
+        meta = load_meta(interval)
         top_features = {}
         if meta and meta.get("feature_importance"):
             top3 = list(meta["feature_importance"].keys())[:3]

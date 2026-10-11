@@ -36,8 +36,9 @@ public class BullishIndicator {
     private static final int MACD_SLOW = 26;
     private static final int MACD_SIGNAL = 9;
 
-    // Stochastik-Parameter
-    private static final int STOCH_K = 14;
+    // Stochastik-Parameter (01.10. von 14 auf 10 umgestellt, einheitlich mit
+    // ml-service/engineer.py und BearishIndicator)
+    private static final int STOCH_K = 10;
     private static final int STOCH_D = 3;
 
     /**

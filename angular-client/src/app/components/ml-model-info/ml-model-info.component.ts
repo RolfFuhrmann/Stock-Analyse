@@ -1,16 +1,7 @@
 import { Component, computed, input } from '@angular/core';
 
-import { MlIntervalBreakdown, MlModelInfo } from '../../models/stock.models';
-import { candleName, formatNumber } from '../../shared/ml-format.util';
-
-interface BreakdownRow {
-  name:        string;
-  train:       string;
-  test:        string;
-  positive:    string;
-  typical:     string;
-  untested:    boolean;
-}
+import { MlModelInfoSingle } from '../../models/stock.models';
+import { formatNumber } from '../../shared/ml-format.util';
 
 interface ImportanceRow {
   label: string;
@@ -28,12 +19,16 @@ interface CalibrationRow {
 }
 
 /**
- * Modell-Info des KI-Signals (Einstellungen → KI-Modell).
+ * Modell-Info des KI-Signals für EINEN Zeitrahmen (Einstellungen → KI-Modell).
  *
- * Zeigt, was das Modell gelernt hat, woraus Training und Test bestehen, wie gut
- * es abschneidet und welche Merkmale es am stärksten nutzt. Dumb Component: die
- * Daten liefert GET /ml/info. Diagnosefelder (Zusammensetzung, Kalibrierung)
- * gibt es erst bei Modellen, die nach dem 21.09. trainiert wurden.
+ * Seit 29.09. gibt es drei eigenständige Modelle (1d/4h/1h) statt einem
+ * gemeinsamen - diese Komponente zeigt weiterhin nur eines an, welches wählt
+ * der Parent (settings-panel) über einen kleinen Umschalter aus und reicht es
+ * als `info` rein. Zeigt, was das Modell gelernt hat, woraus Training und Test
+ * bestehen, wie gut es abschneidet und welche Merkmale es am stärksten nutzt.
+ * Dumb Component: die Daten liefert GET /ml/info. Diagnosefelder
+ * (Zusammensetzung, Kalibrierung) gibt es erst bei Modellen, die nach dem
+ * 21.09. trainiert wurden.
  */
 @Component({
   selector: 'app-ml-model-info',
@@ -78,32 +73,24 @@ interface CalibrationRow {
         </div>
       </div>
 
-      @if (breakdown().length > 0) {
+      @if (summary(); as s) {
         <h4>Woraus Training und Test bestehen</h4>
-        <table class="table">
-          <thead>
-            <tr><th>Zeitrahmen</th><th>Training</th><th>Test</th><th>Anstiege</th><th>Ø Modellwert</th></tr>
-          </thead>
-          <tbody>
-            @for (row of breakdown(); track row.name) {
-              <tr [class.untested]="row.untested">
-                <td>{{ row.name }}</td><td>{{ row.train }}</td><td>{{ row.test }}</td>
-                <td>{{ row.positive }}</td><td>{{ row.typical }}</td>
-              </tr>
-            }
-          </tbody>
-        </table>
-        @if (untestedNames().length > 0) {
+        <dl class="kv">
+          <dt>Trainingsmenge</dt><dd>{{ s.train.toLocaleString('de-DE') }} Kerzen</dd>
+          <dt>Testmenge</dt><dd>{{ s.test.toLocaleString('de-DE') }} Kerzen</dd>
+          <dt>Anstiege</dt><dd>{{ s.positive }}</dd>
+          <dt>Ø Modellwert</dt><dd>{{ s.typical }}</dd>
+        </dl>
+        @if (s.untested) {
           <div class="note warn">
-            Für {{ untestedNames().join(' und ') }} enthält die Testmenge keine Kerzen – die Trefferqualität oben
-            sagt dazu nichts. „Ø Modellwert“ ist der durchschnittliche Wert des Modells im jeweiligen Zeitrahmen,
-            „Anstiege“ der Anteil tatsächlicher Anstiege: liegt der Durchschnittswert weit darüber, ist der Wert
-            nicht als Prozentsatz zu lesen (Klassen-Gewichtung im Training).
+            Die Testmenge enthält keine Kerzen – die Trefferqualität oben sagt dazu nichts. „Ø Modellwert“ ist der
+            durchschnittliche Wert des Modells, „Anstiege“ der Anteil tatsächlicher Anstiege: liegt der
+            Durchschnittswert weit darüber, ist der Wert nicht als Prozentsatz zu lesen (Klassen-Gewichtung im Training).
           </div>
         } @else {
           <div class="note">
-            „Ø Modellwert“ ist der durchschnittliche Wert des Modells im jeweiligen Zeitrahmen, „Anstiege“ der Anteil
-            tatsächlicher Anstiege. Liegt der Durchschnittswert weit darüber, ist der Wert nicht als Prozentsatz zu lesen.
+            „Ø Modellwert“ ist der durchschnittliche Wert des Modells, „Anstiege“ der Anteil tatsächlicher Anstiege.
+            Liegt der Durchschnittswert weit darüber, ist der Wert nicht als Prozentsatz zu lesen.
           </div>
         }
       }
@@ -182,7 +169,7 @@ interface CalibrationRow {
 })
 export class MlModelInfoComponent {
 
-  readonly info = input.required<MlModelInfo>();
+  readonly info = input.required<MlModelInfoSingle>();
 
   readonly threshold = computed(() => formatNumber(this.info().reversal_threshold_pct ?? 0, 0));
   readonly samples   = computed(() => (this.info().total_samples ?? 0).toLocaleString('de-DE'));
@@ -202,20 +189,17 @@ export class MlModelInfoComponent {
     return asPercent ? `${formatNumber(value * 100, 0)} %` : formatNumber(value, 3);
   }
 
-  readonly breakdown = computed<BreakdownRow[]>(() => {
-    const data = this.info().breakdown;
-    if (!data) return [];
-    return Object.entries(data).map(([interval, b]: [string, MlIntervalBreakdown]) => ({
-      name:     candleName(interval),
-      train:    b.train_samples.toLocaleString('de-DE'),
-      test:     b.test_samples.toLocaleString('de-DE'),
-      positive: b.positive_rate_pct != null ? `${formatNumber(b.positive_rate_pct)} %` : '–',
-      typical:  b.mean_score_pct != null ? `${formatNumber(b.mean_score_pct)} %` : '–',
-      untested: b.test_samples === 0,
-    }));
+  readonly summary = computed(() => {
+    const s = this.info().summary;
+    if (!s) return null;
+    return {
+      train:    s.train_samples,
+      test:     s.test_samples,
+      positive: s.positive_rate_pct != null ? `${formatNumber(s.positive_rate_pct)} %` : '–',
+      typical:  s.mean_score_pct != null ? `${formatNumber(s.mean_score_pct)} %` : '–',
+      untested: s.test_samples === 0,
+    };
   });
-
-  readonly untestedNames = computed(() => this.breakdown().filter((r) => r.untested).map((r) => r.name));
 
   readonly calibration = computed<CalibrationRow[]>(() =>
     (this.info().calibration ?? []).map((c) => ({

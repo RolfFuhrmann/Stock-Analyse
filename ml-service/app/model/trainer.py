@@ -36,14 +36,35 @@ from sklearn.preprocessing import StandardScaler
 from xgboost import XGBClassifier
 
 from app.config import settings
-from app.features.engineer import FEATURE_NAMES, INTERVAL_CODE_MAP, compute_features, compute_labels
+from app.features.engineer import FEATURE_NAMES, compute_features, compute_labels
 
 logger = logging.getLogger(__name__)
 
-MODEL_PATH      = Path(settings.model_dir) / "xgb_reversal.joblib"
-SCALER_PATH     = Path(settings.model_dir) / "scaler.joblib"
-CALIBRATOR_PATH = Path(settings.model_dir) / "calibrator.joblib"
-META_PATH       = Path(settings.model_dir) / "model_meta.json"
+INTERVALS = ("1d", "4h", "1h")
+
+
+def _paths(interval: str) -> dict[str, Path]:
+    """
+    Dateipfade für EIN Modell (29.09.: ein eigenständiges Modell je
+    Zeitrahmen statt eines gemeinsamen Modells mit interval_code-Feature -
+    1h/4h haben inzwischen genug Historie dafür, siehe CLAUDE.md 3.8).
+    """
+    d = Path(settings.model_dir)
+    return {
+        "model":      d / f"xgb_reversal_{interval}.joblib",
+        "scaler":     d / f"scaler_{interval}.joblib",
+        "calibrator": d / f"calibrator_{interval}.joblib",
+        "meta":       d / f"model_meta_{interval}.json",
+    }
+
+
+def any_model_ready() -> bool:
+    """True, sobald mindestens eines der drei Modelle existiert."""
+    return any(_paths(iv)["meta"].exists() for iv in INTERVALS)
+
+
+def all_models_ready() -> bool:
+    return all(_paths(iv)["meta"].exists() for iv in INTERVALS)
 
 
 def _split_chronological(
@@ -97,10 +118,12 @@ def _collect_features_for_interval(
             )
             continue
         try:
-            # interval wird als Feature #39 (interval_code) eingebettet
             feat   = compute_features(df, interval=interval)
             labels = compute_labels(
-                df, settings.forecast_horizon, settings.reversal_threshold_pct
+                df, settings.forecast_horizon[interval], settings.reversal_threshold_pct[interval],
+                downtrend_lookback=settings.downtrend_lookback,
+                downtrend_threshold_pct=settings.downtrend_threshold_pct,
+                low_break_tolerance_pct=settings.low_break_tolerance_pct,
             )
 
             labels = labels.dropna()
@@ -137,12 +160,6 @@ CALIBRATION_BINS = 10
 CALIBRATION_MIN_SAMPLES = 20
 
 
-def _interval_name(code: float) -> str:
-    """interval_code (0/1/2) → "1d"/"4h"/"1h"."""
-    names = {c: n for n, c in INTERVAL_CODE_MAP.items()}
-    return names.get(int(round(code)), "?")
-
-
 def _diagnostics(
     X_train: pd.DataFrame, y_train: pd.Series,
     X_test: pd.DataFrame, y_test: pd.Series,
@@ -150,37 +167,23 @@ def _diagnostics(
     y_prob_train: np.ndarray,
 ) -> dict:
     """
-    Diagnose-Daten für die Modell-Info im Client (21.09.) - verändern das Modell nicht.
+    Diagnose-Daten für die Modell-Info im Client (21.09., 29.09. vereinfacht:
+    kein Breakdown mehr nach interval_code nötig, da jedes Modell jetzt schon
+    genau einen Zeitrahmen abdeckt - die Werte hier sind direkt die des ganzen
+    Modells).
 
-    - breakdown:   je Zeitrahmen Anzahl Samples in Train/Test, Anteil positiver Labels,
-                   typischer Modellwert (Mittel über alle Kerzen des Zeitrahmens) und
-                   Testmetriken. Zeigt, woraus die Testmenge tatsächlich besteht und
-                   auf welchem Niveau die Modellwerte je Zeitrahmen liegen.
-    - calibration: je Wahrscheinlichkeits-Bin der mittlere Modellwert und die in der
-                   Testmenge tatsächlich beobachtete Trefferquote. Weicht beides stark
-                   ab, ist der Modellwert kein echter Prozentsatz (scale_pos_weight
-                   verschiebt ihn nach oben).
+    - summary:     Anzahl Samples in Train/Test, Anteil positiver Labels,
+                   typischer Modellwert (Mittel über Train+Test).
+    - calibration: je Wahrscheinlichkeits-Bin der mittlere Modellwert und die
+                   tatsächlich beobachtete Trefferquote in der Testmenge.
     """
-    breakdown = {}
-    for code in sorted(set(X_train["interval_code"]) | set(X_test["interval_code"])):
-        name       = _interval_name(code)
-        train_mask = (X_train["interval_code"] == code).to_numpy()
-        test_mask  = (X_test["interval_code"] == code).to_numpy()
-
-        all_scores = np.concatenate([y_prob_train[train_mask], y_prob[test_mask]])
-        entry = {
-            "train_samples":     int(train_mask.sum()),
-            "test_samples":      int(test_mask.sum()),
-            "positive_rate_pct": round(float(y_train[train_mask].mean() * 100), 2) if train_mask.any() else None,
-            "mean_score_pct":    round(float(all_scores.mean() * 100), 1) if len(all_scores) else None,
-        }
-        y_t = y_test[test_mask]
-        if test_mask.any() and y_t.nunique() == 2:
-            pred = (y_prob[test_mask] >= 0.5).astype(int)
-            entry["test_roc_auc"]   = round(float(roc_auc_score(y_t, y_prob[test_mask])), 4)
-            entry["test_precision"] = round(float(precision_score(y_t, pred, zero_division=0)), 4)
-            entry["test_recall"]    = round(float(recall_score(y_t, pred, zero_division=0)), 4)
-        breakdown[name] = entry
+    all_scores = np.concatenate([y_prob_train, y_prob]) if len(y_prob_train) or len(y_prob) else np.array([])
+    summary = {
+        "train_samples":     int(len(X_train)),
+        "test_samples":      int(len(X_test)),
+        "positive_rate_pct": round(float(y_train.mean() * 100), 2) if len(y_train) else None,
+        "mean_score_pct":    round(float(all_scores.mean() * 100), 1) if len(all_scores) else None,
+    }
 
     edges = np.linspace(0.0, 1.0, CALIBRATION_BINS + 1)
     calibration = []
@@ -197,48 +200,23 @@ def _diagnostics(
             "actual_pct":    round(float(y_arr[in_bin].mean() * 100), 1),
         })
 
-    return {"breakdown": breakdown, "calibration": calibration}
+    return {"summary": summary, "calibration": calibration}
 
 
-def train(ohlcv_by_interval: dict[str, dict[str, pd.DataFrame]]) -> dict:
+def _train_single_interval(interval: str, tickers_df: dict[str, pd.DataFrame]) -> dict:
     """
-    Multi-Interval-Training.
-
-    ohlcv_by_interval: {
-        "1d": { "ADS.DE": DataFrame, ... },
-        "4h": { "ADS.DE": DataFrame, ... },
-        "1h": { "ADS.DE": DataFrame, ... },
-    }
-
-    Alle drei Zeitrahmen werden zu einem gemeinsamen Trainings-Dataset
-    zusammengeführt. interval_code (0/1/2) als Feature #39 erlaubt dem
-    Modell, je Zeitrahmen unterschiedliche Schwellen zu lernen.
-
-    Gibt ein Dict mit Trainings-Metriken zurück.
+    Trainiert EIN eigenständiges Modell für genau einen Zeitrahmen
+    (29.09., ersetzt das gemeinsame Multi-Interval-Modell mit
+    interval_code-Feature - siehe Modulkopf/CLAUDE.md 3.8).
     """
-    total_tickers = sum(len(v) for v in ohlcv_by_interval.values())
-    logger.info("═" * 60)
-    logger.info("TRAINING gestartet (Multi-Interval: 1d / 4h / 1h)")
-    logger.info(f"  Ticker gesamt:      {total_tickers}")
-    logger.info(f"  Forecast-Horizont:  {settings.forecast_horizon} Kerzen")
-    logger.info(f"  Umkehr-Schwelle:    {settings.reversal_threshold_pct}%")
-    logger.info("═" * 60)
+    logger.info(f"── Interval {interval}: {len(tickers_df)} Ticker ──")
+    paths = _paths(interval)
 
     # ── 1. Features/Labels berechnen und PRO TICKER chronologisch splitten ──
-    train_parts, val_parts, test_parts = [], [], []
-
-    for interval, tickers_df in ohlcv_by_interval.items():
-        if not tickers_df:
-            logger.warning(f"Keine Daten für Interval {interval} – übersprungen")
-            continue
-        logger.info(f"── Interval {interval}: {len(tickers_df)} Ticker ──")
-        tr, va, te = _collect_features_for_interval(tickers_df, interval)
-        train_parts.extend(tr)
-        val_parts.extend(va)
-        test_parts.extend(te)
+    train_parts, val_parts, test_parts = _collect_features_for_interval(tickers_df, interval)
 
     if not train_parts:
-        raise ValueError("Kein einziger Ticker/Interval lieferte ausreichend Daten für das Training")
+        raise ValueError(f"[{interval}] Kein einziger Ticker lieferte ausreichend Daten für das Training")
 
     def concat(parts):
         feats  = pd.concat([f for f, _ in parts], ignore_index=True)
@@ -251,38 +229,32 @@ def train(ohlcv_by_interval: dict[str, dict[str, pd.DataFrame]]) -> dict:
 
     total_samples = len(X_train) + len(X_val) + len(X_test)
     logger.info(
-        f"Gesamt: {total_samples} Samples "
+        f"[{interval}] Gesamt: {total_samples} Samples "
         f"(train={len(X_train)}, val={len(X_val)}, test={len(X_test)})"
     )
 
     if y_train.sum() < settings.min_samples_per_class:
         raise ValueError(
-            f"Zu wenig positive Trainingsbeispiele: {y_train.sum()} "
+            f"[{interval}] Zu wenig positive Trainingsbeispiele: {y_train.sum()} "
             f"(Minimum: {settings.min_samples_per_class})"
         )
     if y_val.sum() < 5 or y_test.sum() < 5:
         logger.warning(
-            f"Sehr wenige positive Beispiele in Val ({int(y_val.sum())}) oder "
+            f"[{interval}] Sehr wenige positive Beispiele in Val ({int(y_val.sum())}) oder "
             f"Test ({int(y_test.sum())}) - Metriken und Kalibrierung sind entsprechend unsicher."
         )
 
     # ── 2. Feature-Skalierung (nur auf Train angepasst) ───────
-    # XGBoost braucht keine Skalierung, aber der Scaler hilft beim
-    # späteren LSTM-Training und macht Features vergleichbar.
     scaler    = StandardScaler()
     X_train_s = scaler.fit_transform(X_train)
     X_val_s   = scaler.transform(X_val) if len(X_val) else X_train_s[:0]
     X_test_s  = scaler.transform(X_test) if len(X_test) else X_train_s[:0]
 
     # ── 3. Klassengewichte berechnen ──────────────────────────
-    # Umkehrpunkte sind selten → Klasse 1 höher gewichten
     pos_weight = (y_train == 0).sum() / max((y_train == 1).sum(), 1)
-    logger.info(f"Klassen-Gewicht (pos): {pos_weight:.2f}")
+    logger.info(f"[{interval}] Klassen-Gewicht (pos): {pos_weight:.2f}")
 
     # ── 4. XGBoost trainieren ──────────────────────────────────
-    # Early Stopping läuft jetzt auf der VALIDIERUNGSmenge (vorher auf der
-    # Testmenge - dadurch waren die berichteten Testmetriken leicht optimistisch,
-    # weil dieselbe Menge auch die Modellgröße mitbestimmt hatte).
     model = XGBClassifier(
         n_estimators=400,
         max_depth=5,
@@ -294,27 +266,22 @@ def train(ohlcv_by_interval: dict[str, dict[str, pd.DataFrame]]) -> dict:
         eval_metric="logloss",
         early_stopping_rounds=30,
         random_state=42,
-        n_jobs=-1,          # alle Kerne nutzen
-        tree_method="hist", # schnellster Algorithmus, M3-kompatibel
+        n_jobs=-1,
+        tree_method="hist",
     )
 
     eval_set = [(X_val_s, y_val)] if len(X_val) else [(X_train_s, y_train)]
     model.fit(X_train_s, y_train, eval_set=eval_set, verbose=False)
 
     # ── 5. Kalibrierung (auf der Validierungsmenge, NICHT auf Test) ────
-    # scale_pos_weight verschiebt den Modellwert systematisch nach oben - er
-    # ist dadurch kein Prozentsatz mehr (siehe CLAUDE.md). Isotonische
-    # Regression bildet den rohen Modellwert monoton auf die tatsächlich in
-    # der Validierungsmenge beobachtete Trefferquote ab. Ohne ausreichend
-    # Val-Daten bleibt die Kalibrierung die Identität.
     raw_val_prob = model.predict_proba(X_val_s)[:, 1] if len(X_val) else np.array([])
     if len(raw_val_prob) >= 20 and y_val.nunique() == 2:
         calibrator = IsotonicRegression(out_of_bounds="clip", y_min=0.0, y_max=1.0)
         calibrator.fit(raw_val_prob, y_val.to_numpy())
     else:
-        logger.warning("Zu wenig Validierungsdaten für eine Kalibrierung - Modellwert bleibt unkalibriert.")
+        logger.warning(f"[{interval}] Zu wenig Validierungsdaten für eine Kalibrierung - Modellwert bleibt unkalibriert.")
         calibrator = IsotonicRegression(out_of_bounds="clip", y_min=0.0, y_max=1.0)
-        calibrator.fit([0.0, 1.0], [0.0, 1.0])  # Identität als Fallback
+        calibrator.fit([0.0, 1.0], [0.0, 1.0])
 
     def calibrate(p: np.ndarray) -> np.ndarray:
         return calibrator.predict(p)
@@ -329,7 +296,7 @@ def train(ohlcv_by_interval: dict[str, dict[str, pd.DataFrame]]) -> dict:
     recall    = recall_score(y_test, y_pred, zero_division=0) if len(y_test) else 0.0
     auc       = roc_auc_score(y_test, y_prob) if y_test.sum() > 0 else 0.0
 
-    logger.info("── Backtesting-Ergebnis (Testmenge, kalibriert) ──")
+    logger.info(f"── [{interval}] Backtesting-Ergebnis (Testmenge, kalibriert) ──")
     logger.info(f"  Precision:  {precision:.3f}")
     logger.info(f"  Recall:     {recall:.3f}")
     logger.info(f"  ROC-AUC:    {auc:.3f}")
@@ -339,35 +306,32 @@ def train(ohlcv_by_interval: dict[str, dict[str, pd.DataFrame]]) -> dict:
                                            zero_division=0))
 
     # ── 7. Feature Importance (Top 10) ────────────────────────
-    importances = dict(zip(
-        FEATURE_NAMES,
-        model.feature_importances_.tolist()
-    ))
+    importances = dict(zip(FEATURE_NAMES, model.feature_importances_.tolist()))
     top10 = sorted(importances.items(), key=lambda x: x[1], reverse=True)[:10]
-    logger.info("── Top-10 Features ───────────────────────────────")
+    logger.info(f"── [{interval}] Top-10 Features ───────────────────────────")
     for name, imp in top10:
         logger.info(f"  {name:<25} {imp:.4f}")
 
     # ── 8. Modell speichern ───────────────────────────────────
     Path(settings.model_dir).mkdir(parents=True, exist_ok=True)
-    joblib.dump(model,      MODEL_PATH)
-    joblib.dump(scaler,     SCALER_PATH)
-    joblib.dump(calibrator, CALIBRATOR_PATH)
+    joblib.dump(model,      paths["model"])
+    joblib.dump(scaler,     paths["scaler"])
+    joblib.dump(calibrator, paths["calibrator"])
 
     meta = {
+        "interval":           interval,
         "trained_at":         datetime.now().isoformat(),
-        "tickers":            [
-            f"{t}/{iv}"
-            for iv, tmap in ohlcv_by_interval.items()
-            for t in tmap
-        ],
+        "tickers":            list(tickers_df.keys()),
         "total_samples":      total_samples,
         "train_samples":      len(X_train),
         "val_samples":        len(X_val),
         "test_samples":       len(X_test),
         "positive_rate_pct":  round(float(pd.concat([y_train, y_val, y_test]).mean() * 100), 2) if total_samples else 0.0,
-        "forecast_horizon":   settings.forecast_horizon,
-        "reversal_threshold": settings.reversal_threshold_pct,
+        "forecast_horizon":   settings.forecast_horizon[interval],
+        "reversal_threshold": settings.reversal_threshold_pct[interval],
+        "downtrend_lookback":      settings.downtrend_lookback,
+        "downtrend_threshold_pct": settings.downtrend_threshold_pct,
+        "low_break_tolerance_pct": settings.low_break_tolerance_pct,
         "calibrated":         True,
         "backtesting": {
             "precision": round(precision, 4),
@@ -376,50 +340,106 @@ def train(ohlcv_by_interval: dict[str, dict[str, pd.DataFrame]]) -> dict:
         },
         "feature_importance": {k: round(v, 4) for k, v in top10},
         "feature_importance_all": {k: round(v, 4) for k, v in sorted(importances.items(), key=lambda x: x[1], reverse=True)},
-        "intervals_trained":  list(ohlcv_by_interval.keys()),
         "n_estimators_used":  model.best_iteration + 1,
-        # Diagnose für die Modell-Info im Client (verändert das Modell nicht)
         "scale_pos_weight":   round(float(pos_weight), 3),
         **_diagnostics(X_train, y_train, X_test, y_test, y_prob, y_prob_train),
     }
-    with open(META_PATH, "w") as f:
+    with open(paths["meta"], "w") as f:
         json.dump(meta, f, indent=2)
 
-    logger.info(f"Modell gespeichert → {MODEL_PATH}")
-    logger.info("═" * 60)
-
+    logger.info(f"[{interval}] Modell gespeichert → {paths['model']}")
     return meta
 
 
-def load_model():
-    """Lädt Modell + Scaler. Gibt (model, scaler) zurück oder (None, None)."""
-    if not MODEL_PATH.exists() or not SCALER_PATH.exists():
+def train(ohlcv_by_interval: dict[str, dict[str, pd.DataFrame]]) -> dict:
+    """
+    Trainiert DREI eigenständige Modelle, eines je Zeitrahmen (29.09.,
+    ersetzt das gemeinsame Multi-Interval-Modell - siehe CLAUDE.md 3.8:
+    1h/4h haben inzwischen genug Historie für je ein eigenes Modell, statt
+    sich das über ein einzelnes interval_code-Feature "erschließen" zu
+    müssen).
+
+    ohlcv_by_interval: {
+        "1d": { "ADS.DE": DataFrame, ... },
+        "4h": { "ADS.DE": DataFrame, ... },
+        "1h": { "ADS.DE": DataFrame, ... },
+    }
+
+    Gibt {"1d": {...meta...}, "4h": {...}, "1h": {...}} zurück - fehlgeschlagene
+    Zeitrahmen (z.B. zu wenig Daten) tauchen mit {"status": "error", ...} auf,
+    ohne die anderen beiden Trainings zu verhindern.
+    """
+    logger.info("═" * 60)
+    logger.info("TRAINING gestartet (3 eigenständige Modelle: 1d / 4h / 1h)")
+    for iv in INTERVALS:
+        logger.info(
+            f"  [{iv}] Forecast-Horizont: {settings.forecast_horizon[iv]} Kerzen, "
+            f"Umkehr-Schwelle: {settings.reversal_threshold_pct[iv]}%"
+        )
+    logger.info(
+        f"  Downtrend-Vorbedingung (für alle 3 gleich): >= {settings.downtrend_threshold_pct}% unter "
+        f"Hoch der letzten {settings.downtrend_lookback} Kerzen "
+        f"(Tief-Toleranz {settings.low_break_tolerance_pct}%)"
+    )
+    logger.info("═" * 60)
+
+    results: dict[str, dict] = {}
+    any_ok = False
+    for interval in INTERVALS:
+        tickers_df = ohlcv_by_interval.get(interval) or {}
+        if not tickers_df:
+            logger.warning(f"Keine Daten für Interval {interval} – übersprungen")
+            results[interval] = {"status": "error", "message": "Keine OHLCV-Daten verfügbar"}
+            continue
+        try:
+            results[interval] = _train_single_interval(interval, tickers_df)
+            any_ok = True
+        except Exception as e:
+            logger.error(f"[{interval}] Training fehlgeschlagen: {e}")
+            results[interval] = {"status": "error", "message": str(e)}
+
+    if not any_ok:
+        raise ValueError("Kein einziges der drei Modelle konnte trainiert werden")
+
+    logger.info("═" * 60)
+    return results
+
+
+def load_model(interval: str):
+    """Lädt Modell + Scaler für EIN Interval. Gibt (model, scaler) zurück oder (None, None)."""
+    paths = _paths(interval)
+    if not paths["model"].exists() or not paths["scaler"].exists():
         return None, None
     try:
-        return joblib.load(MODEL_PATH), joblib.load(SCALER_PATH)
+        return joblib.load(paths["model"]), joblib.load(paths["scaler"])
     except Exception as e:
-        logger.error(f"Modell laden fehlgeschlagen: {e}")
+        logger.error(f"[{interval}] Modell laden fehlgeschlagen: {e}")
         return None, None
 
 
-def load_calibrator():
+def load_calibrator(interval: str):
     """
-    Lädt den Kalibrator (21.09.). None, wenn keiner existiert - das betrifft
-    Modelle, die noch mit der Vorversion des Trainers trainiert wurden; der
-    Predictor arbeitet dann ohne Kalibrierung weiter (unveränderter Modellwert).
+    Lädt den Kalibrator für EIN Interval (21.09.). None, wenn keiner existiert.
     """
-    if not CALIBRATOR_PATH.exists():
+    paths = _paths(interval)
+    if not paths["calibrator"].exists():
         return None
     try:
-        return joblib.load(CALIBRATOR_PATH)
+        return joblib.load(paths["calibrator"])
     except Exception as e:
-        logger.error(f"Kalibrator laden fehlgeschlagen: {e}")
+        logger.error(f"[{interval}] Kalibrator laden fehlgeschlagen: {e}")
         return None
 
 
-def load_meta() -> dict | None:
-    """Lädt die gespeicherten Trainings-Metadaten."""
-    if not META_PATH.exists():
+def load_meta(interval: str) -> dict | None:
+    """Lädt die gespeicherten Trainings-Metadaten für EIN Interval."""
+    path = _paths(interval)["meta"]
+    if not path.exists():
         return None
-    with open(META_PATH) as f:
+    with open(path) as f:
         return json.load(f)
+
+
+def load_all_meta() -> dict[str, dict | None]:
+    """Metadaten aller drei Modelle, {"1d": {...} | None, "4h": ..., "1h": ...}."""
+    return {iv: load_meta(iv) for iv in INTERVALS}

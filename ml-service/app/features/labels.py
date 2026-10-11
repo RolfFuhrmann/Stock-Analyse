@@ -61,7 +61,6 @@ FEATURE_INFO: dict[str, tuple[str, str]] = {
     "roc_20d": ("Kursänderung 20 Kerzen (ROC)", PCT),
     "days_above_sma20": ("Kerzen über GD 20 (von den letzten 20)", SHARE20),
     "days_above_sma50": ("Kerzen über GD 50 (von den letzten 20)", SHARE20),
-    "interval_code": ("Zeitrahmen", INTERVAL),
 }
 
 # Sicherheitsnetz: jedes Feature des Modells braucht ein Label
